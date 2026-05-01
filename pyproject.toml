@@ -1,0 +1,42 @@
+[project]
+name = "task-manager"
+version = "0.1.0"
+description = "AI-assisted task manager for creating, viewing, and completing tasks through an intelligent agent"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "alembic>=1.18.4",
+    "asyncpg>=0.31.0",
+    "pydantic-settings>=2.14.0",
+    "sqlalchemy[asyncio]>=2.0.49",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.1.0",
+    "pytest-dotenv>=0.5.2",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = ["I001"]
+
+[tool.ruff.lint.isort]
+lines-after-imports = 2
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+env_files = [
+    ".env",
+    ".test.env",
+]
+env_override_existing_values = true
+markers = [
+    "integration: tests that require external services such as PostgreSQL",
+]
