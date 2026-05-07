@@ -12,7 +12,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from constants import TEST_TITLE_PREFIX
+from constants import TEST_TAG_PREFIX, TEST_TITLE_PREFIX
 
 
 REQUIRED_DB_ENV = (
@@ -62,22 +62,34 @@ async def test_engine() -> AsyncGenerator[AsyncEngine, Any]:
 
 @pytest_asyncio.fixture(autouse=True)
 async def clean_test_tasks(test_engine: AsyncEngine):
-    await _delete_test_tasks(test_engine)
+    await _delete_test_data(test_engine)
     yield
-    await _delete_test_tasks(test_engine)
+    await _delete_test_data(test_engine)
 
 
 @pytest.fixture
-def service(test_engine: AsyncEngine):
+def task_service(test_engine: AsyncEngine):
     from adapters.unitofwork import SQLAlchemyUnitOfWork
     from services.tasks import TaskService
 
     return TaskService(SQLAlchemyUnitOfWork(test_engine))
 
 
-async def _delete_test_tasks(engine: AsyncEngine) -> None:
+@pytest.fixture
+def tag_service(test_engine: AsyncEngine):
+    from adapters.unitofwork import SQLAlchemyUnitOfWork
+    from services.tags import TagService
+
+    return TagService(SQLAlchemyUnitOfWork(test_engine))
+
+
+async def _delete_test_data(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.execute(
             text("DELETE FROM task WHERE title LIKE :title_prefix"),
             {"title_prefix": f"{TEST_TITLE_PREFIX}%"},
+        )
+        await connection.execute(
+            text("DELETE FROM tag WHERE name LIKE :tag_prefix"),
+            {"tag_prefix": f"{TEST_TAG_PREFIX}%"},
         )
