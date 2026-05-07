@@ -20,6 +20,21 @@ dev = [
     "pytest-dotenv>=0.5.2",
 ]
 
+[tool.basedpyright]
+include = ["src/task_manager", "tests"]
+extraPaths = ["src/task_manager", "tests/integration"]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+defineConstant = { DEBUG = true }
+
+reportMissingImports = "error"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportAny = false
+
 [tool.ruff]
 line-length = 100
 
