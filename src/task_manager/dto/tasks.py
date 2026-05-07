@@ -1,3 +1,4 @@
+from uuid import UUID
 from datetime import datetime
 from dataclasses import dataclass
 
@@ -9,7 +10,9 @@ TITLE_MAX_LENGTH = 250
 
 @dataclass(frozen=True, slots=True)
 class ListTasksFilters:
+    tag_ids: tuple[UUID, ...] = ()
     statuses: tuple[TaskStatus, ...] = ()
+    search_text: str | None = None
     starts_from: datetime | None = None
     starts_to: datetime | None = None
     ends_from: datetime | None = None
@@ -37,6 +40,7 @@ class AddTask:
     starts_at: datetime
     ends_at: datetime
     description: str | None = None
+    tag_ids: tuple[UUID, ...] = ()
     status: TaskStatus = TaskStatus.ACTIVE
 
     def __post_init__(self) -> None:

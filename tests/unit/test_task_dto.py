@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import pytest
 
@@ -41,6 +42,24 @@ def test_new_task_text_fields_are_trimmed() -> None:
     # Assert
     assert task.title == "Prepare report"
     assert task.description == "Collect notes and send summary"
+
+
+def test_new_task_accepts_tag_ids() -> None:
+    # Arrange
+    tag_id = uuid4()
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act
+    task = AddTask(
+        title="Prepare report",
+        starts_at=starts_at,
+        ends_at=ends_at,
+        tag_ids=(tag_id,),
+    )
+
+    # Assert
+    assert task.tag_ids == (tag_id,)
 
 
 def test_task_with_deadline_before_start_is_rejected() -> None:
@@ -122,3 +141,22 @@ def test_task_list_filter_with_invalid_start_range_is_rejected() -> None:
     # Act, Assert
     with pytest.raises(ValueError):
         ListTasksFilters(starts_from=starts_from, starts_to=starts_to)
+
+
+def test_task_list_filter_accepts_tag_ids() -> None:
+    # Arrange
+    tag_id = uuid4()
+
+    # Act
+    filters = ListTasksFilters(tag_ids=(tag_id,))
+
+    # Assert
+    assert filters.tag_ids == (tag_id,)
+
+
+def test_task_list_filter_accepts_search_text() -> None:
+    # Act
+    filters = ListTasksFilters(search_text="invoice report")
+
+    # Assert
+    assert filters.search_text == "invoice report"

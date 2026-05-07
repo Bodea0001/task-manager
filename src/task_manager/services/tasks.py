@@ -85,6 +85,24 @@ class TaskService:
             await self._check_if_task_exists(uow, task_id)
             await uow.task.delete_task(task_id)
 
+    async def add_tag_to_task(self, task_id: UUID, tag_id: UUID) -> Task:
+        async with self.uow() as uow:
+            await self._check_if_task_exists(uow, task_id)
+            await self._check_if_tag_exists(uow, tag_id)
+            await uow.task.add_tag_to_task(task_id, tag_id)
+            return await uow.task.get_task(task_id)
+
+    async def delete_tag_from_task(self, task_id: UUID, tag_id: UUID) -> Task:
+        async with self.uow() as uow:
+            await self._check_if_task_exists(uow, task_id)
+            await self._check_if_tag_exists(uow, tag_id)
+            await uow.task.delete_tag_from_task(task_id, tag_id)
+            return await uow.task.get_task(task_id)
+
     async def _check_if_task_exists(self, uow, task_id: UUID) -> None:
         if not await uow.task.exists_task(task_id):
             raise app_exc.TaskNotFound
+
+    async def _check_if_tag_exists(self, uow, tag_id: UUID) -> None:
+        if not await uow.tag.exists_tag(tag_id):
+            raise app_exc.TagNotFound

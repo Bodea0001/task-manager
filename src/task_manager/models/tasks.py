@@ -1,12 +1,20 @@
+from typing import TYPE_CHECKING
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from uuid import UUID
+
+from sqlalchemy import Index, ForeignKey, CheckConstraint
+from sqlalchemy.orm import Mapped, relationship, mapped_column
 from sqlalchemy.types import String, Text, TIMESTAMP, Enum
+from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.sql.sqltypes import Uuid
 
 from models.base import Base
 from models.dependencies import created_at, uuidpk
 from domain.value_objects.tasks import TaskStatus
+
+if TYPE_CHECKING:
+    from models.tags import Tag
 
 
 class Task(Base):
@@ -30,11 +38,39 @@ class Task(Base):
     )
     created_at: Mapped[created_at]
     completed_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True, comment="Дата/время окончания задачи"
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment="Дата/время окончания задачи",
+    )
+    
+    tags: Mapped[list[Tag]] = relationship(
+        "Tag",
+        secondary="task_tag",
+        viewonly=True,
+        order_by="Tag.name",
     )
 
     __table_args__ = (
         CheckConstraint("length(title) > 0", "non_empty_title"),
         CheckConstraint("length(description) > 0", "non_empty_description"),
         CheckConstraint("ends_at >= starts_at", "correct_deadline"),
+    )
+
+
+class TaskStore(Base):
+    __tablename__ = "task_store"
+
+    task_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("task.task_id", ondelete="CASCADE"),
+        primary_key=True,
+        comment="Идентификатор задачи",
+    )
+    tsv_content: Mapped[str] = mapped_column(
+        TSVECTOR,
+        comment="Поисковый вектор задачи",
+    )
+
+    __table_args__ = (
+        Index("ix_task_store_tsv_content", "tsv_content", postgresql_using="gin"),
     )
