@@ -1,0 +1,124 @@
+from datetime import datetime, timedelta
+
+import pytest
+
+from domain.value_objects.tasks import TaskStatus
+from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
+
+
+def test_new_task_has_active_status_by_default() -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act
+    task = AddTask(
+        title="Prepare report",
+        description="Collect notes and send summary",
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+
+    # Assert
+    assert task.title == "Prepare report"
+    assert task.description == "Collect notes and send summary"
+    assert task.status == TaskStatus.ACTIVE
+
+
+def test_new_task_text_fields_are_trimmed() -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act
+    task = AddTask(
+        title="  Prepare report  ",
+        description="  Collect notes and send summary  ",
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+
+    # Assert
+    assert task.title == "Prepare report"
+    assert task.description == "Collect notes and send summary"
+
+
+def test_task_with_deadline_before_start_is_rejected() -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at - timedelta(minutes=1)
+
+    # Act, Assert
+    with pytest.raises(ValueError):
+        AddTask(title="Prepare report", starts_at=starts_at, ends_at=ends_at)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "",
+        "x" * 251,
+    ],
+)
+def test_task_with_invalid_title_is_rejected(title: str) -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act, Assert
+    with pytest.raises(ValueError):
+        AddTask(title=title, starts_at=starts_at, ends_at=ends_at)
+
+
+def test_task_with_empty_description_is_rejected() -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act, Assert
+    with pytest.raises(ValueError):
+        AddTask(title="Prepare report", description="", starts_at=starts_at, ends_at=ends_at)
+
+
+def test_empty_task_update_is_rejected() -> None:
+    # Act, Assert
+    with pytest.raises(ValueError):
+        UpdateTaskData()
+
+
+def test_task_update_text_fields_are_trimmed() -> None:
+    # Act
+    update_data = UpdateTaskData(
+        title="  Prepare report  ",
+        description="  Collect notes and send summary  ",
+    )
+
+    # Assert
+    assert update_data.title == "Prepare report"
+    assert update_data.description == "Collect notes and send summary"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"title": ""},
+        {"title": "   "},
+        {"title": "x" * 251},
+        {"description": ""},
+        {"description": "   "},
+    ],
+)
+def test_task_update_with_invalid_text_is_rejected(data: dict) -> None:
+    # Act, Assert
+    with pytest.raises(ValueError):
+        UpdateTaskData(**data)
+
+
+def test_task_list_filter_with_invalid_start_range_is_rejected() -> None:
+    # Arrange
+    starts_from = datetime(2026, 5, 5, 11, 0)
+    starts_to = datetime(2026, 5, 5, 10, 0)
+
+    # Act, Assert
+    with pytest.raises(ValueError):
+        ListTasksFilters(starts_from=starts_from, starts_to=starts_to)
