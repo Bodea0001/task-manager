@@ -42,7 +42,7 @@ class Task(Base):
         nullable=True,
         comment="Дата/время окончания задачи",
     )
-    
+
     tags: Mapped[list[Tag]] = relationship(
         "Tag",
         secondary="task_tag",
@@ -71,6 +71,4 @@ class TaskStore(Base):
         comment="Поисковый вектор задачи",
     )
 
-    __table_args__ = (
-        Index("ix_task_store_tsv_content", "tsv_content", postgresql_using="gin"),
-    )
+    __table_args__ = (Index("ix_task_store_tsv_content", "tsv_content", postgresql_using="gin"),)

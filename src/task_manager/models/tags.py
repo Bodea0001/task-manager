@@ -17,7 +17,7 @@ class Tag(Base):
     tag_id: Mapped[uuidpk]
     name: Mapped[str] = mapped_column(String(100), comment="Название тега")
     created_at: Mapped[created_at]
-    
+
     tasks: Mapped[list[Task]] = relationship(
         "Task",
         secondary="task_tag",

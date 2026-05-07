@@ -25,6 +25,4 @@ class TaskTag(Base):
     )
     created_at: Mapped[created_at]
 
-    __table_args__ = (
-        Index("ix_task_tag_tag_id_task_id", "tag_id", "task_id"),
-    )
+    __table_args__ = (Index("ix_task_tag_tag_id_task_id", "tag_id", "task_id"),)
