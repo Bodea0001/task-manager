@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from domain.value_objects.isolation_level import IsolationLevel
+from adapters.repositories.tag_repository import TagRepository
 from adapters.repositories.task_repository import TaskRepository
 
 
@@ -122,6 +123,7 @@ class _TransactionContext:
     def _initialize_repositories(self):
         assert self.session is not None
         logger.debug("Initializing repositories")
+        self.tag = TagRepository(self.session)
         self.task = TaskRepository(self.session)
         logger.debug("Repositories initialized")
 
