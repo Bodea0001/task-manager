@@ -1,57 +1,71 @@
 # Task Manager
 
-Task Manager is an AI-assisted task management service. The project is intended
-to help users manage everyday work through an intelligent agent: create tasks,
-inspect the current task list, update task details, mark tasks as completed, and
-keep the task state organized without manually navigating every operation.
+Task Manager is a task management service designed for working with an
+AI assistant.
 
-The core idea is to combine a clear task domain model with an agent-friendly
-application layer. A user should be able to describe what they need in natural
-language, while the system turns that intent into explicit task operations.
+The service helps keep track of tasks, deadlines, statuses, and related context.
+The user describes what needs to be done, and the assistant can turn that into
+structured task actions: create a task, update it, mark it as done, find related
+tasks, or organize tasks for later.
 
-## Planned Capabilities
+## What It Does
 
-- Create tasks from natural language requests.
-- View active, completed, and overdue tasks.
-- Update task titles, descriptions, deadlines and other info.
-- Mark tasks as completed or reopen them when needed.
+- Creates tasks with a title, description, start time, end time, and status.
+- Shows active, completed, cancelled, and overdue tasks.
+- Updates task details when plans change.
+- Completes, reopens, cancels, and deletes tasks.
+- Finds tasks by status, date range, text, and tags.
+- Creates tasks with tags when the context is already known.
+- Adds and removes tags from existing tasks.
+- Counts tasks that match selected filters.
 
-## Current Stack
+## Tags
 
-- Python 3.14
-- SQLAlchemy asyncio
-- Alembic migrations
-- PostgreSQL via asyncpg
-- uv for dependency management
+Tags are mostly meant for the AI assistant, not for constant manual management.
+
+The assistant can use tags to remember task context: project, topic, person,
+area of responsibility, or any other recurring category. Later, those tags help
+the assistant quickly find related tasks without asking the user to maintain a
+strict folder or label system.
+
+Users can still create, rename, view, and delete tags when needed.
+
+## Search
+
+Tasks can be searched by text from their title and description.
+
+This is useful when the user remembers only part of the task, a topic, or a
+wording fragment, but does not remember the exact deadline, status, or tag.
 
 ## Project Status
 
-The project is in the initialization stage.
+The core task and tag workflows are implemented.
 
-## Configuration
-
-Application settings are loaded from environment variables with the
-`TASK_CONFIG` prefix. Database settings are grouped under `db`.
-
-Expected database variables:
-
-```bash
-TASK_CONFIG_DB_USER=postgres
-TASK_CONFIG_DB_PASSWORD=postgres
-TASK_CONFIG_DB_NAME=task_manager
-TASK_CONFIG_DB_HOST=localhost
-TASK_CONFIG_DB_PORT=5432
-```
+The project currently includes domain models, DTOs, repositories, services,
+database migrations, and tests. A production user interface, HTTP API, or final
+AI-agent integration is not included yet.
 
 ## Development
 
-Install dependencies and run project commands with `uv`:
+Install dependencies:
 
 ```bash
 uv sync
-cd src/task_manager
-uv run python main.py
 ```
 
-The repository is still being shaped, so startup commands and module paths may
-change as the package structure is finalized.
+Run tests:
+
+```bash
+uv run pytest tests/unit
+uv run pytest tests/integration
+```
+
+Apply database migrations:
+
+```bash
+uv run alembic upgrade head
+```
+
+The integration tests require PostgreSQL. Configuration is loaded from
+environment variables with the `TASK_CONFIG` prefix, and test runs can use
+`.env` and `.test.env` files.
