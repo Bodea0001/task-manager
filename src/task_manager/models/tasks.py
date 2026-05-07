@@ -1,0 +1,40 @@
+from datetime import datetime
+
+from sqlalchemy import CheckConstraint
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import String, Text, TIMESTAMP, Enum
+
+from models.base import Base
+from models.dependencies import created_at, uuidpk
+from domain.value_objects.tasks import TaskStatus
+
+
+class Task(Base):
+    __tablename__ = "task"
+
+    task_id: Mapped[uuidpk]
+    title: Mapped[str] = mapped_column(String(250), comment="Заголовок задачи")
+    description: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="Подробное описание задачи"
+    )
+    status: Mapped[TaskStatus] = mapped_column(
+        Enum(TaskStatus, values_callable=lambda enum: [member.value for member in enum]),
+        server_default=TaskStatus.ACTIVE,
+        comment="Статус задачи",
+    )
+    starts_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=False), comment="Дата/время начала задачи"
+    )
+    ends_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=False), comment="Дата/время окончания задачи"
+    )
+    created_at: Mapped[created_at]
+    completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True, comment="Дата/время окончания задачи"
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(title) > 0", "non_empty_title"),
+        CheckConstraint("length(description) > 0", "non_empty_description"),
+        CheckConstraint("ends_at >= starts_at", "correct_deadline"),
+    )
