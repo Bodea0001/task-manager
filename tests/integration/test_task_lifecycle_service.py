@@ -6,7 +6,7 @@ import pytest
 from constants import TEST_TITLE_PREFIX, TEST_USER_ID
 from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
 from helpers import create_tag, create_task, tag_ids
-from domain.value_objects.tasks import Schedule, TaskStatus
+from domain.value_objects.tasks import Schedule, TaskPriority, TaskStatus
 from exceptions import TagNotFound, TaskNotFound, TaskScheduleOverlap
 from services.tags import TagService
 from services.tasks import TaskService
@@ -37,6 +37,7 @@ async def test_user_can_create_a_task(task_service: TaskService) -> None:
     assert sut.title == f"{TEST_TITLE_PREFIX}create"
     assert sut.description == "Initial description"
     assert sut.status == TaskStatus.ACTIVE
+    assert sut.priority == TaskPriority.NORMAL
     assert sut.due_at == ends_at
     assert sut.schedule == Schedule(starts_at=starts_at, ends_at=ends_at)
 
@@ -219,6 +220,24 @@ async def test_user_can_update_task_due_date(task_service: TaskService) -> None:
     assert sut.task_id == task.task_id
     assert sut.due_at == new_due_at
     assert sut.schedule == task.schedule
+
+
+@pytest.mark.asyncio
+async def test_user_can_update_task_priority(task_service: TaskService) -> None:
+    # Arrange
+    task = await create_task(task_service, title="update-priority")
+
+    # Act
+    sut = await task_service.update_task(
+        TEST_USER_ID,
+        task.task_id,
+        UpdateTaskData(priority=TaskPriority.URGENT),
+    )
+
+    # Assert
+    assert sut.task_id == task.task_id
+    assert sut.priority == TaskPriority.URGENT
+    assert sut.status == task.status
 
 
 @pytest.mark.asyncio

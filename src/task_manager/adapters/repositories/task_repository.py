@@ -12,8 +12,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import exceptions as app_exc
 from dto.tasks import ListTasksFilters, AddTask, UpdateTaskData
-from models.tasks import TaskStore, Task as TaskModel, ScheduledTask as ScheduledTaskModel
 from models.tags import Tag as TagModel
+from models.tasks import TaskStore, Task as TaskModel, ScheduledTask as ScheduledTaskModel
 from models.task_tags import TaskTag as TaskTagModel
 from domain.value_objects.tags import Tag as DomainTag
 from domain.value_objects.tasks import FreeTime, Schedule, Task, TaskStatus
@@ -361,6 +361,8 @@ class TaskRepository(SQLAlchemyRepository):
             conditions.append(ScheduledTaskModel.ends_at <= filters.ends_to)
         if filters.statuses:
             conditions.append(TaskModel.status.in_(filters.statuses))
+        if filters.priorities:
+            conditions.append(TaskModel.priority.in_(filters.priorities))
         if filters.tag_ids:
             conditions.append(
                 select(1)
@@ -457,6 +459,7 @@ class TaskRepository(SQLAlchemyRepository):
             description=description,
             due_at=model.due_at,
             status=model.status,
+            priority=model.priority,
             created_at=model.created_at,
             completed_at=model.completed_at,
             schedule=schedule,

@@ -6,7 +6,7 @@ from helpers import create_tag, create_task, task_ids, task_ids_with_test_prefix
 
 from constants import TEST_TITLE_PREFIX, TEST_USER_ID
 from dto.tasks import AddTask, ListTasksFilters
-from domain.value_objects.tasks import TaskStatus
+from domain.value_objects.tasks import TaskPriority, TaskStatus
 from services.tags import TagService
 from services.tasks import TaskService
 
@@ -166,6 +166,31 @@ async def test_user_can_filter_tasks_by_multiple_statuses(task_service: TaskServ
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {active.task_id, completed.task_id}
+
+
+@pytest.mark.asyncio
+async def test_user_can_filter_tasks_by_multiple_priorities(task_service: TaskService) -> None:
+    # Arrange
+    low = await create_task(task_service, title="priority-low", priority=TaskPriority.LOW)
+    high = await create_task(task_service, title="priority-high", priority=TaskPriority.HIGH)
+    urgent = await create_task(
+        task_service,
+        title="priority-urgent",
+        priority=TaskPriority.URGENT,
+    )
+
+    # Act
+    sut = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            priorities=(TaskPriority.HIGH, TaskPriority.URGENT),
+            limit=1000,
+        ),
+    )
+
+    # Assert
+    assert task_ids_with_test_prefix(sut) == {high.task_id, urgent.task_id}
+    assert low.task_id not in task_ids(sut)
 
 
 @pytest.mark.asyncio

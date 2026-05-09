@@ -2,7 +2,7 @@ from uuid import UUID
 from datetime import datetime
 from dataclasses import dataclass
 
-from domain.value_objects.tasks import Schedule, TaskStatus
+from domain.value_objects.tasks import Schedule, TaskPriority, TaskStatus
 
 
 TITLE_MAX_LENGTH = 250
@@ -12,6 +12,7 @@ TITLE_MAX_LENGTH = 250
 class ListTasksFilters:
     tag_ids: tuple[UUID, ...] = ()
     statuses: tuple[TaskStatus, ...] = ()
+    priorities: tuple[TaskPriority, ...] = ()
     search_text: str | None = None
     due_from: datetime | None = None
     due_to: datetime | None = None
@@ -47,6 +48,7 @@ class AddTask:
     description: str | None = None
     tag_ids: tuple[UUID, ...] = ()
     status: TaskStatus = TaskStatus.ACTIVE
+    priority: TaskPriority = TaskPriority.NORMAL
     schedule: Schedule | None = None
 
     def __post_init__(self) -> None:
@@ -62,6 +64,7 @@ class UpdateTaskData:
     title: str | None = None
     description: str | None = None
     status: TaskStatus | None = None
+    priority: TaskPriority | None = None
     due_at: datetime | None = None
     schedule: Schedule | None = None
 
@@ -75,6 +78,7 @@ class UpdateTaskData:
                 self.title,
                 self.description,
                 self.status,
+                self.priority,
                 self.schedule,
             )
         ):

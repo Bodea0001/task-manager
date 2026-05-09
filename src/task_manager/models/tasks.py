@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from models.base import Base
 from models.dependencies import created_at, uuidpk
-from domain.value_objects.tasks import TaskStatus
+from domain.value_objects.tasks import TaskPriority, TaskStatus
 
 if TYPE_CHECKING:
     from models.tags import Tag
@@ -28,6 +28,11 @@ class Task(Base):
         Enum(TaskStatus, values_callable=lambda enum: [member.value for member in enum]),
         server_default=TaskStatus.ACTIVE,
         comment="Статус задачи",
+    )
+    priority: Mapped[TaskPriority] = mapped_column(
+        Enum(TaskPriority, values_callable=lambda enum: [member.value for member in enum]),
+        server_default=TaskPriority.NORMAL,
+        comment="Приоритет задачи",
     )
     due_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=False), comment="Дедлайн задачи")
     creator_id: Mapped[UUID] = mapped_column(

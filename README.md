@@ -3,18 +3,19 @@
 Task Manager is a task management service designed for working with an
 AI assistant.
 
-The service keeps track of tasks, deadlines, schedules, statuses, tags, and user
-accounts. A user can describe what needs to be done, and an assistant can turn
-that into structured task actions: create a task, update it, mark it as done,
-find related tasks, or organize tasks for later.
+The service keeps track of tasks, deadlines, schedules, statuses, priorities,
+tags, and user accounts. A user can describe what needs to be done, and an
+assistant can turn that into structured task actions: create a task, update it,
+mark it as done, find related tasks, or organize tasks for later.
 
 ## What It Does
 
-- Creates tasks with a title, description, due date, schedule, and status.
+- Creates tasks with a title, description, due date, schedule, status, and
+  priority.
 - Shows active, completed, cancelled, and overdue tasks.
 - Updates task details when plans change.
 - Completes, reopens, cancels, and deletes tasks.
-- Finds tasks by status, due date, scheduled time, text, and tags.
+- Finds tasks by status, priority, due date, scheduled time, text, and tags.
 - Creates tasks with tags when the context is already known.
 - Adds and removes tags from existing tasks.
 - Counts tasks that match selected filters.
@@ -35,6 +36,11 @@ The assistant should remember context with tags when it is useful: project,
 topic, person, place, responsibility area, or any repeated category. Tags should
 help the assistant find related tasks later without forcing the user to manage a
 strict folder system.
+
+The assistant should set one of the supported task priorities: `low`, `normal`,
+`high`, or `urgent`. If the user does not explicitly name a priority, the
+assistant should infer it from urgency, deadline, impact, and wording, and use
+`normal` when there is no clear reason to raise or lower it.
 
 The assistant should keep each user's tasks separate, avoid overlapping planned
 work for the same user, and explain when a requested schedule conflicts with an
@@ -61,6 +67,7 @@ Update task details:
 - "Change the report deadline to next Monday."
 - "Rename the task about slides to 'Prepare Q2 roadmap slides'."
 - "Add more details to the tax task: check deductions and upload receipts."
+- "Make the server certificate task urgent."
 - "Cancel the task about buying office chairs."
 
 Complete or reopen tasks:
@@ -73,6 +80,7 @@ Complete or reopen tasks:
 Find tasks:
 
 - "Show my active tasks."
+- "Show urgent tasks."
 - "What is overdue?"
 - "Find tasks about invoices."
 - "Show tasks due this week."

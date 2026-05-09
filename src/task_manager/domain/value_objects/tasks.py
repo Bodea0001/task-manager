@@ -12,11 +12,19 @@ class TaskStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class TaskPriority(StrEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
 @dataclass(frozen=True, slots=True)
 class Task:
     task_id: UUID
     title: str
     status: TaskStatus
+    priority: TaskPriority
     due_at: datetime
     created_at: datetime
     description: str | None = None

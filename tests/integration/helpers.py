@@ -4,7 +4,7 @@ from uuid import UUID
 
 from constants import TEST_TAG_PREFIX, TEST_TITLE_PREFIX, TEST_USER_ID
 from domain.value_objects.tags import Tag
-from domain.value_objects.tasks import Schedule, Task, TaskStatus
+from domain.value_objects.tasks import Schedule, Task, TaskPriority, TaskStatus
 from dto.tasks import AddTask
 from services.tags import TagService
 from services.tasks import TaskService
@@ -24,6 +24,7 @@ async def create_task(
     starts_at: datetime | None = None,
     ends_at: datetime | None = None,
     status: TaskStatus = TaskStatus.ACTIVE,
+    priority: TaskPriority = TaskPriority.NORMAL,
 ) -> Task:
     if starts_at is None:
         starts_at = datetime(2099, 5, 5, 10, 0) + timedelta(days=next(_DEFAULT_SCHEDULE_SEQUENCE))
@@ -46,6 +47,7 @@ async def create_task(
             tag_ids=tag_ids,
             schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
             status=status,
+            priority=priority,
         ),
     )
 

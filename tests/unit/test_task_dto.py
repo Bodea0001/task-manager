@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from domain.value_objects.tasks import Schedule, TaskStatus
+from domain.value_objects.tasks import Schedule, TaskPriority, TaskStatus
 from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
 
 
@@ -27,6 +27,22 @@ def test_new_task_has_active_status_by_default() -> None:
     assert task.due_at == due_at
     assert task.schedule == Schedule(starts_at=starts_at, ends_at=ends_at)
     assert task.status == TaskStatus.ACTIVE
+    assert task.priority == TaskPriority.NORMAL
+
+
+def test_new_task_accepts_priority() -> None:
+    # Arrange
+    due_at = datetime(2026, 5, 5, 11, 0)
+
+    # Act
+    task = AddTask(
+        title="Prepare report",
+        due_at=due_at,
+        priority=TaskPriority.HIGH,
+    )
+
+    # Assert
+    assert task.priority == TaskPriority.HIGH
 
 
 def test_new_task_text_fields_are_trimmed() -> None:
@@ -133,6 +149,14 @@ def test_empty_task_update_is_rejected() -> None:
         UpdateTaskData()
 
 
+def test_task_update_accepts_priority() -> None:
+    # Act
+    update_data = UpdateTaskData(priority=TaskPriority.URGENT)
+
+    # Assert
+    assert update_data.priority == TaskPriority.URGENT
+
+
 def test_task_update_text_fields_are_trimmed() -> None:
     # Act
     update_data = UpdateTaskData(
@@ -211,3 +235,11 @@ def test_task_list_filter_accepts_search_text() -> None:
 
     # Assert
     assert filters.search_text == "invoice report"
+
+
+def test_task_list_filter_accepts_priorities() -> None:
+    # Act
+    filters = ListTasksFilters(priorities=(TaskPriority.HIGH, TaskPriority.URGENT))
+
+    # Assert
+    assert filters.priorities == (TaskPriority.HIGH, TaskPriority.URGENT)
