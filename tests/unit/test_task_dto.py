@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from domain.value_objects.tasks import TaskStatus
+from domain.value_objects.tasks import Schedule, TaskStatus
 from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
 
 
@@ -11,18 +11,21 @@ def test_new_task_has_active_status_by_default() -> None:
     # Arrange
     starts_at = datetime(2026, 5, 5, 10, 0)
     ends_at = starts_at + timedelta(hours=1)
+    due_at = ends_at
 
     # Act
     task = AddTask(
         title="Prepare report",
+        due_at=due_at,
         description="Collect notes and send summary",
-        starts_at=starts_at,
-        ends_at=ends_at,
+        schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
     )
 
     # Assert
     assert task.title == "Prepare report"
     assert task.description == "Collect notes and send summary"
+    assert task.due_at == due_at
+    assert task.schedule == Schedule(starts_at=starts_at, ends_at=ends_at)
     assert task.status == TaskStatus.ACTIVE
 
 
@@ -34,9 +37,9 @@ def test_new_task_text_fields_are_trimmed() -> None:
     # Act
     task = AddTask(
         title="  Prepare report  ",
+        due_at=ends_at,
         description="  Collect notes and send summary  ",
-        starts_at=starts_at,
-        ends_at=ends_at,
+        schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
     )
 
     # Assert
@@ -53,13 +56,25 @@ def test_new_task_accepts_tag_ids() -> None:
     # Act
     task = AddTask(
         title="Prepare report",
-        starts_at=starts_at,
-        ends_at=ends_at,
+        due_at=ends_at,
+        schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
         tag_ids=(tag_id,),
     )
 
     # Assert
     assert task.tag_ids == (tag_id,)
+
+
+def test_new_task_accepts_no_schedule() -> None:
+    # Arrange
+    due_at = datetime(2026, 5, 5, 11, 0)
+
+    # Act
+    task = AddTask(title="Prepare report", due_at=due_at)
+
+    # Assert
+    assert task.due_at == due_at
+    assert task.schedule is None
 
 
 def test_task_with_deadline_before_start_is_rejected() -> None:
@@ -69,7 +84,11 @@ def test_task_with_deadline_before_start_is_rejected() -> None:
 
     # Act, Assert
     with pytest.raises(ValueError):
-        AddTask(title="Prepare report", starts_at=starts_at, ends_at=ends_at)
+        AddTask(
+            title="Prepare report",
+            due_at=starts_at,
+            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+        )
 
 
 @pytest.mark.parametrize(
@@ -86,7 +105,11 @@ def test_task_with_invalid_title_is_rejected(title: str) -> None:
 
     # Act, Assert
     with pytest.raises(ValueError):
-        AddTask(title=title, starts_at=starts_at, ends_at=ends_at)
+        AddTask(
+            title=title,
+            due_at=ends_at,
+            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+        )
 
 
 def test_task_with_empty_description_is_rejected() -> None:
@@ -96,7 +119,12 @@ def test_task_with_empty_description_is_rejected() -> None:
 
     # Act, Assert
     with pytest.raises(ValueError):
-        AddTask(title="Prepare report", description="", starts_at=starts_at, ends_at=ends_at)
+        AddTask(
+            title="Prepare report",
+            due_at=ends_at,
+            description="",
+            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+        )
 
 
 def test_empty_task_update_is_rejected() -> None:
@@ -141,6 +169,29 @@ def test_task_list_filter_with_invalid_start_range_is_rejected() -> None:
     # Act, Assert
     with pytest.raises(ValueError):
         ListTasksFilters(starts_from=starts_from, starts_to=starts_to)
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {
+            "due_from": datetime(2026, 5, 5, 11, 0),
+            "due_to": datetime(2026, 5, 5, 10, 0),
+        },
+        {
+            "ends_from": datetime(2026, 5, 5, 11, 0),
+            "ends_to": datetime(2026, 5, 5, 10, 0),
+        },
+        {
+            "starts_from": datetime(2026, 5, 5, 11, 0),
+            "ends_to": datetime(2026, 5, 5, 10, 0),
+        },
+    ],
+)
+def test_task_list_filter_with_invalid_ranges_is_rejected(filters: dict) -> None:
+    # Act, Assert
+    with pytest.raises(ValueError):
+        ListTasksFilters(**filters)
 
 
 def test_task_list_filter_accepts_tag_ids() -> None:

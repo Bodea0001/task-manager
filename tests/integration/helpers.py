@@ -1,12 +1,16 @@
 from datetime import datetime, timedelta
+from itertools import count
 from uuid import UUID
 
 from constants import TEST_TAG_PREFIX, TEST_TITLE_PREFIX
 from domain.value_objects.tags import Tag
-from domain.value_objects.tasks import Task, TaskStatus
+from domain.value_objects.tasks import Schedule, Task, TaskStatus
 from dto.tasks import AddTask
 from services.tags import TagService
 from services.tasks import TaskService
+
+
+_DEFAULT_SCHEDULE_SEQUENCE = count()
 
 
 async def create_task(
@@ -15,15 +19,19 @@ async def create_task(
     title: str,
     description: str | None = None,
     tag_ids: tuple[UUID, ...] = (),
+    due_at: datetime | None = None,
     starts_at: datetime | None = None,
     ends_at: datetime | None = None,
     status: TaskStatus = TaskStatus.ACTIVE,
 ) -> Task:
     if starts_at is None:
-        starts_at = datetime(2099, 5, 5, 10, 0)
+        starts_at = datetime(2099, 5, 5, 10, 0) + timedelta(days=next(_DEFAULT_SCHEDULE_SEQUENCE))
 
     if ends_at is None:
         ends_at = starts_at + timedelta(hours=1)
+
+    if due_at is None:
+        due_at = ends_at
 
     if description is None:
         description = f"{title} description"
@@ -31,10 +39,10 @@ async def create_task(
     return await task_service.create_task(
         AddTask(
             title=f"{TEST_TITLE_PREFIX}{title}",
+            due_at=due_at,
             description=description,
             tag_ids=tag_ids,
-            starts_at=starts_at,
-            ends_at=ends_at,
+            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
             status=status,
         )
     )

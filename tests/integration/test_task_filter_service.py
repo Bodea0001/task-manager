@@ -4,7 +4,8 @@ import pytest
 
 from helpers import create_tag, create_task, task_ids, task_ids_with_test_prefix
 
-from dto.tasks import ListTasksFilters
+from constants import TEST_TITLE_PREFIX
+from dto.tasks import AddTask, ListTasksFilters
 from domain.value_objects.tasks import TaskStatus
 from services.tags import TagService
 from services.tasks import TaskService
@@ -116,14 +117,14 @@ async def test_user_can_filter_tasks_by_inclusive_time_boundaries(
     await create_task(
         task_service,
         title="time-boundary-before-start",
-        starts_at=datetime(2099, 8, 5, 9, 59),
-        ends_at=ends_at,
+        starts_at=datetime(2099, 8, 5, 8, 0),
+        ends_at=datetime(2099, 8, 5, 9, 0),
     )
     await create_task(
         task_service,
         title="time-boundary-after-end",
-        starts_at=starts_at,
-        ends_at=datetime(2099, 8, 5, 12, 1),
+        starts_at=datetime(2099, 8, 5, 13, 0),
+        ends_at=datetime(2099, 8, 5, 14, 0),
     )
 
     # Act
@@ -213,6 +214,261 @@ async def test_user_can_filter_tasks_by_any_of_multiple_tags(
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {first.task_id, second.task_id}
+
+
+@pytest.mark.asyncio
+async def test_multiple_tag_filter_does_not_duplicate_matching_tasks(
+    task_service: TaskService,
+    tag_service: TagService,
+) -> None:
+    # Arrange
+    matching = await create_task(task_service, title="multi-tag-no-duplicate")
+    other = await create_task(task_service, title="multi-tag-no-duplicate-other")
+    first_tag = await create_tag(tag_service, name="multi-task-no-duplicate-first")
+    second_tag = await create_tag(tag_service, name="multi-task-no-duplicate-second")
+    await task_service.add_tag_to_task(matching.task_id, first_tag.tag_id)
+    await task_service.add_tag_to_task(matching.task_id, second_tag.tag_id)
+    await task_service.add_tag_to_task(other.task_id, second_tag.tag_id)
+
+    # Act
+    filters = ListTasksFilters(tag_ids=(first_tag.tag_id, second_tag.tag_id), limit=1000)
+    tasks = await task_service.get_tasks(filters)
+    count = await task_service.count_tasks(filters)
+
+    # Assert
+    assert [task.task_id for task in tasks if task.task_id == matching.task_id] == [
+        matching.task_id
+    ]
+    assert task_ids_with_test_prefix(tasks) == {matching.task_id, other.task_id}
+    assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_user_can_filter_tasks_by_due_window(task_service: TaskService) -> None:
+    # Arrange
+    matching = await create_task(
+        task_service,
+        title="due-window-match",
+        due_at=datetime(2099, 8, 2, 12, 0),
+    )
+    await create_task(
+        task_service,
+        title="due-window-before",
+        due_at=datetime(2099, 8, 1, 12, 0),
+    )
+    await create_task(
+        task_service,
+        title="due-window-after",
+        due_at=datetime(2099, 8, 3, 12, 0),
+    )
+
+    # Act
+    sut = await task_service.get_tasks(
+        ListTasksFilters(
+            due_from=datetime(2099, 8, 2, 0, 0),
+            due_to=datetime(2099, 8, 2, 23, 59),
+            limit=1000,
+        )
+    )
+
+    # Assert
+    assert task_ids_with_test_prefix(sut) == {matching.task_id}
+
+
+@pytest.mark.asyncio
+async def test_empty_search_text_is_ignored(task_service: TaskService) -> None:
+    # Arrange
+    first = await create_task(
+        task_service,
+        title="empty-search-first",
+        due_at=datetime(2099, 8, 4, 12, 0),
+    )
+    second = await create_task(
+        task_service,
+        title="empty-search-second",
+        due_at=datetime(2099, 8, 4, 13, 0),
+    )
+    await create_task(
+        task_service,
+        title="empty-search-outside-window",
+        due_at=datetime(2099, 8, 5, 12, 0),
+    )
+
+    # Act
+    sut = await task_service.get_tasks(
+        ListTasksFilters(
+            search_text="",
+            due_from=datetime(2099, 8, 4, 0, 0),
+            due_to=datetime(2099, 8, 4, 23, 59),
+            limit=1000,
+        )
+    )
+
+    # Assert
+    assert task_ids_with_test_prefix(sut) == {first.task_id, second.task_id}
+
+
+@pytest.mark.asyncio
+async def test_user_can_count_tasks_matching_due_window(task_service: TaskService) -> None:
+    # Arrange
+    await create_task(
+        task_service,
+        title="due-count-match",
+        due_at=datetime(2099, 8, 2, 12, 0),
+    )
+    await create_task(
+        task_service,
+        title="due-count-other",
+        due_at=datetime(2099, 8, 3, 12, 0),
+    )
+
+    # Act
+    sut = await task_service.count_tasks(
+        ListTasksFilters(
+            due_from=datetime(2099, 8, 2, 0, 0),
+            due_to=datetime(2099, 8, 2, 23, 59),
+        )
+    )
+
+    # Assert
+    assert sut == 1
+
+
+@pytest.mark.asyncio
+async def test_unscheduled_task_matches_due_filter(task_service: TaskService) -> None:
+    # Arrange
+    unscheduled = await task_service.create_task(
+        AddTask(
+            title=f"{TEST_TITLE_PREFIX}due-filter-unscheduled",
+            due_at=datetime(2099, 8, 6, 12, 0),
+        )
+    )
+    await create_task(
+        task_service,
+        title="due-filter-scheduled-outside",
+        due_at=datetime(2099, 8, 7, 12, 0),
+    )
+
+    # Act
+    sut = await task_service.get_tasks(
+        ListTasksFilters(
+            due_from=datetime(2099, 8, 6, 0, 0),
+            due_to=datetime(2099, 8, 6, 23, 59),
+            limit=1000,
+        )
+    )
+
+    # Assert
+    assert task_ids_with_test_prefix(sut) == {unscheduled.task_id}
+
+
+@pytest.mark.asyncio
+async def test_schedule_filters_exclude_unscheduled_tasks(task_service: TaskService) -> None:
+    # Arrange
+    scheduled = await create_task(
+        task_service,
+        title="schedule-filter-scheduled",
+        starts_at=datetime(2099, 9, 1, 10, 0),
+    )
+    unscheduled = await task_service.create_task(
+        AddTask(
+            title=f"{TEST_TITLE_PREFIX}schedule-filter-unscheduled",
+            due_at=datetime(2099, 9, 1, 11, 0),
+        )
+    )
+
+    # Act
+    sut = await task_service.get_tasks(
+        ListTasksFilters(
+            starts_from=datetime(2099, 9, 1, 0, 0),
+            starts_to=datetime(2099, 9, 1, 23, 59),
+            limit=1000,
+        )
+    )
+
+    # Assert
+    ids = task_ids(sut)
+    assert scheduled.task_id in ids
+    assert unscheduled.task_id not in ids
+
+
+@pytest.mark.asyncio
+async def test_deleted_tag_is_removed_from_tag_filters(
+    task_service: TaskService,
+    tag_service: TagService,
+) -> None:
+    # Arrange
+    task = await create_task(task_service, title="delete-tag-filter")
+    first_tag = await create_tag(tag_service, name="delete-tag-filter-first")
+    second_tag = await create_tag(tag_service, name="delete-tag-filter-second")
+    await task_service.add_tag_to_task(task.task_id, first_tag.tag_id)
+    await task_service.add_tag_to_task(task.task_id, second_tag.tag_id)
+
+    # Act
+    await task_service.delete_tag_from_task(task.task_id, first_tag.tag_id)
+    first_tag_tasks = await task_service.get_tasks(
+        ListTasksFilters(tag_ids=(first_tag.tag_id,), limit=1000)
+    )
+    second_tag_tasks = await task_service.get_tasks(
+        ListTasksFilters(tag_ids=(second_tag.tag_id,), limit=1000)
+    )
+
+    # Assert
+    assert task.task_id not in task_ids(first_tag_tasks)
+    assert task.task_id in task_ids(second_tag_tasks)
+
+
+@pytest.mark.asyncio
+async def test_user_can_filter_tasks_by_combined_criteria(
+    task_service: TaskService,
+    tag_service: TagService,
+) -> None:
+    # Arrange
+    tag = await create_tag(tag_service, name="combined-filter")
+    matching = await create_task(
+        task_service,
+        title="combined-filter-match",
+        description="quarterly invoice review",
+        due_at=datetime(2099, 10, 1, 12, 0),
+        starts_at=datetime(2099, 10, 1, 10, 0),
+        status=TaskStatus.ACTIVE,
+    )
+    wrong_status = await create_task(
+        task_service,
+        title="combined-filter-completed",
+        description="quarterly invoice review",
+        due_at=datetime(2099, 10, 1, 12, 0),
+        starts_at=datetime(2099, 10, 1, 12, 0),
+        status=TaskStatus.COMPLETED,
+    )
+    wrong_text = await create_task(
+        task_service,
+        title="combined-filter-wrong-text",
+        description="quarterly roadmap review",
+        due_at=datetime(2099, 10, 1, 12, 0),
+        starts_at=datetime(2099, 10, 1, 14, 0),
+        status=TaskStatus.ACTIVE,
+    )
+    await task_service.add_tag_to_task(matching.task_id, tag.tag_id)
+    await task_service.add_tag_to_task(wrong_status.task_id, tag.tag_id)
+    await task_service.add_tag_to_task(wrong_text.task_id, tag.tag_id)
+
+    # Act
+    sut = await task_service.get_tasks(
+        ListTasksFilters(
+            tag_ids=(tag.tag_id,),
+            statuses=(TaskStatus.ACTIVE,),
+            search_text="invoice",
+            due_from=datetime(2099, 10, 1, 0, 0),
+            due_to=datetime(2099, 10, 1, 23, 59),
+            starts_from=datetime(2099, 10, 1, 0, 0),
+            starts_to=datetime(2099, 10, 1, 23, 59),
+            limit=1000,
+        )
+    )
+
+    # Assert
+    assert task_ids_with_test_prefix(sut) == {matching.task_id}
 
 
 @pytest.mark.asyncio

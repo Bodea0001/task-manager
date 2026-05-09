@@ -4,7 +4,9 @@ import pytest
 
 from helpers import create_task, task_ids_with_test_prefix
 
-from domain.value_objects.tasks import TaskStatus
+from constants import TEST_TITLE_PREFIX
+from dto.tasks import AddTask, ListTasksFilters
+from domain.value_objects.tasks import FreeTime, Schedule, TaskStatus
 from services.tasks import TaskService
 
 
@@ -69,6 +71,40 @@ async def test_user_can_count_tasks_with_default_filters(task_service: TaskServi
 
 
 @pytest.mark.asyncio
+async def test_user_can_paginate_tasks_ordered_by_due_date(task_service: TaskService) -> None:
+    # Arrange
+    first = await create_task(
+        task_service,
+        title="due-page-first",
+        due_at=datetime(2099, 7, 1, 10, 0),
+    )
+    second = await create_task(
+        task_service,
+        title="due-page-second",
+        due_at=datetime(2099, 7, 2, 10, 0),
+    )
+    await create_task(
+        task_service,
+        title="due-page-third",
+        due_at=datetime(2099, 7, 3, 10, 0),
+    )
+
+    # Act
+    sut = await task_service.get_tasks(
+        ListTasksFilters(
+            due_from=datetime(2099, 7, 1),
+            due_to=datetime(2099, 7, 4),
+            limit=1,
+            offset=1,
+        )
+    )
+
+    # Assert
+    assert task_ids_with_test_prefix(sut) == {second.task_id}
+    assert first.task_id not in {task.task_id for task in sut}
+
+
+@pytest.mark.asyncio
 async def test_user_can_view_overdue_tasks(task_service: TaskService) -> None:
     # Arrange
     first_overdue = await create_task(
@@ -88,3 +124,151 @@ async def test_user_can_view_overdue_tasks(task_service: TaskService) -> None:
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {first_overdue.task_id, second_overdue.task_id}
+
+
+@pytest.mark.asyncio
+async def test_overdue_tasks_are_selected_by_due_date(task_service: TaskService) -> None:
+    # Arrange
+    overdue = await task_service.create_task(
+        AddTask(
+            title=f"{TEST_TITLE_PREFIX}overdue-by-due",
+            due_at=datetime(2001, 1, 1, 9, 0),
+            schedule=Schedule(
+                starts_at=datetime(2099, 1, 1, 10, 0),
+                ends_at=datetime(2099, 1, 1, 11, 0),
+            ),
+        )
+    )
+    await task_service.create_task(
+        AddTask(
+            title=f"{TEST_TITLE_PREFIX}not-overdue-by-due",
+            due_at=datetime(2099, 1, 1, 9, 0),
+            schedule=Schedule(
+                starts_at=datetime(2001, 1, 1, 10, 0),
+                ends_at=datetime(2001, 1, 1, 11, 0),
+            ),
+        )
+    )
+
+    # Act
+    sut = await task_service.get_overdue_tasks(limit=1000)
+
+    # Assert
+    assert task_ids_with_test_prefix(sut) == {overdue.task_id}
+
+
+@pytest.mark.asyncio
+async def test_user_can_view_free_time_for_empty_schedule(task_service: TaskService) -> None:
+    # Arrange
+    window = Schedule(
+        starts_at=datetime(2099, 8, 1, 9, 0),
+        ends_at=datetime(2099, 8, 1, 18, 0),
+    )
+
+    # Act
+    sut = await task_service.get_free_time(window)
+
+    # Assert
+    assert sut == [FreeTime(starts_at=window.starts_at, ends_at=window.ends_at)]
+
+
+@pytest.mark.asyncio
+async def test_user_can_view_sorted_free_time_between_scheduled_tasks(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    await create_task(
+        task_service,
+        title="free-time-first-busy",
+        starts_at=datetime(2099, 8, 2, 10, 0),
+        ends_at=datetime(2099, 8, 2, 11, 0),
+    )
+    await create_task(
+        task_service,
+        title="free-time-second-busy",
+        starts_at=datetime(2099, 8, 2, 13, 0),
+        ends_at=datetime(2099, 8, 2, 14, 0),
+    )
+
+    # Act
+    sut = await task_service.get_free_time(
+        Schedule(
+            starts_at=datetime(2099, 8, 2, 9, 0),
+            ends_at=datetime(2099, 8, 2, 15, 0),
+        )
+    )
+
+    # Assert
+    assert sut == [
+        FreeTime(
+            starts_at=datetime(2099, 8, 2, 9, 0),
+            ends_at=datetime(2099, 8, 2, 10, 0),
+        ),
+        FreeTime(
+            starts_at=datetime(2099, 8, 2, 11, 0),
+            ends_at=datetime(2099, 8, 2, 13, 0),
+        ),
+        FreeTime(
+            starts_at=datetime(2099, 8, 2, 14, 0),
+            ends_at=datetime(2099, 8, 2, 15, 0),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_free_time_view_clips_scheduled_tasks_to_window(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    await create_task(
+        task_service,
+        title="free-time-overlaps-start",
+        starts_at=datetime(2099, 8, 3, 8, 0),
+        ends_at=datetime(2099, 8, 3, 10, 0),
+    )
+    await create_task(
+        task_service,
+        title="free-time-overlaps-end",
+        starts_at=datetime(2099, 8, 3, 16, 0),
+        ends_at=datetime(2099, 8, 3, 19, 0),
+    )
+
+    # Act
+    sut = await task_service.get_free_time(
+        Schedule(
+            starts_at=datetime(2099, 8, 3, 9, 0),
+            ends_at=datetime(2099, 8, 3, 18, 0),
+        )
+    )
+
+    # Assert
+    assert sut == [
+        FreeTime(
+            starts_at=datetime(2099, 8, 3, 10, 0),
+            ends_at=datetime(2099, 8, 3, 16, 0),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_free_time_view_returns_empty_list_when_window_is_fully_busy(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    await create_task(
+        task_service,
+        title="free-time-fully-busy",
+        starts_at=datetime(2099, 8, 4, 9, 0),
+        ends_at=datetime(2099, 8, 4, 18, 0),
+    )
+
+    # Act
+    sut = await task_service.get_free_time(
+        Schedule(
+            starts_at=datetime(2099, 8, 4, 9, 0),
+            ends_at=datetime(2099, 8, 4, 18, 0),
+        )
+    )
+
+    # Assert
+    assert sut == []
