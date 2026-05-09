@@ -179,6 +179,16 @@ class TaskRepository(SQLAlchemyRepository):
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
+    async def exists_task_including_deleted(self, user_id: UUID, task_id: UUID) -> bool:
+        stmt = select(
+            select(1)
+            .select_from(TaskModel)
+            .where(TaskModel.creator_id == user_id, TaskModel.task_id == task_id)
+            .exists()
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
     @translate_repository_errors
     async def add_task(self, user_id: UUID, data: AddTask) -> Task:
         values = {"creator_id": user_id, **self._task_insert_values(data)}

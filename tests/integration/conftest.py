@@ -20,6 +20,7 @@ TEST_USER_EMAIL = "test-user@example.com"
 TEST_OTHER_USER_EMAIL = "test-other-user@example.com"
 TEST_DATABASE_NAME_PARTS = {"test", "testing", "pytest"}
 TEST_TABLES = (
+    "audit_event",
     "user_refresh_token",
     "task_store",
     "task_tag",
