@@ -13,6 +13,8 @@ mark it as done, find related tasks, or organize tasks for later.
 - Helps users remember what needs to be done and when.
 - Keeps upcoming, overdue, completed, and cancelled work easy to review.
 - Helps users plan time for focused work without creating schedule conflicts.
+- Shows which existing tasks would get in the way before adding work to a
+  specific time window.
 - Makes it easy to change plans when deadlines, priorities, or details move.
 - Connects related work with lightweight context, such as projects, people, or
   topics.
@@ -60,6 +62,7 @@ Plan time for work:
 - "Move the design review to Thursday afternoon."
 - "Remove the scheduled time from the budget task."
 - "Find free time this week for a two-hour planning session."
+- "Can I schedule a deep work session tomorrow from 14:00 to 16:00?"
 
 Update task details:
 
@@ -101,7 +104,8 @@ Work with tags and context:
 Implemented product areas:
 
 - Tasks: creation, updates, deadlines, scheduling, priorities, status changes,
-  removal, search, counts, free-time lookup, and change history.
+  removal, search, counts, free-time lookup, schedule availability checks, and
+  change history.
 - Tags and context: tag creation, renaming, removal, task tagging, contextual
   lookup, and change history.
 - Users and access: user accounts, authentication, and per-user data access.

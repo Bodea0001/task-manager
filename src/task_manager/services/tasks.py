@@ -3,7 +3,7 @@ from typing import Any
 
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from domain.value_objects.audit import AuditEvent, AuditEntityType, AuditEventType
-from domain.value_objects.tasks import FreeTime, Schedule, Task, TaskStatus
+from domain.value_objects.tasks import FreeTime, Schedule, Task, TaskStatus, ScheduleAvailability
 from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
 import exceptions as app_exc
 
@@ -100,6 +100,18 @@ class TaskService:
     async def get_free_time(self, user_id: UUID, window: Schedule) -> list[FreeTime]:
         async with self.uow(read_only=True) as uow:
             return await uow.task.get_free_time(user_id, window)
+
+    async def check_schedule_availability(
+        self,
+        user_id: UUID,
+        window: Schedule,
+    ) -> ScheduleAvailability:
+        async with self.uow(read_only=True) as uow:
+            blocking_tasks = await uow.task.get_schedule_blocking_tasks(user_id, window)
+            return ScheduleAvailability(
+                can_add_task=not blocking_tasks,
+                blocking_tasks=blocking_tasks,
+            )
 
     async def update_task(self, user_id: UUID, task_id: UUID, data: UpdateTaskData) -> Task:
         async with self.uow() as uow:

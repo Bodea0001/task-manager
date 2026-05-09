@@ -43,3 +43,9 @@ class Schedule:
 class FreeTime:
     starts_at: datetime
     ends_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleAvailability:
+    can_add_task: bool
+    blocking_tasks: list[Task] = field(default_factory=list)

@@ -154,6 +154,22 @@ class TaskRepository(SQLAlchemyRepository):
         )
         return [self._row_to_free_time(row) for row in result.all()]
 
+    async def get_schedule_blocking_tasks(self, user_id: UUID, window: Schedule) -> list[Task]:
+        stmt = (
+            self._select_task_list_rows_with_tags()
+            .join(ScheduledTaskModel, ScheduledTaskModel.task_id == TaskModel.task_id)
+            .where(
+                TaskModel.creator_id == user_id,
+                self._task_is_not_deleted(),
+                ScheduledTaskModel.starts_at < window.ends_at,
+                ScheduledTaskModel.ends_at > window.starts_at,
+            )
+            .order_by(ScheduledTaskModel.starts_at, ScheduledTaskModel.ends_at)
+        )
+
+        result = await self.session.execute(stmt)
+        return self._task_list_rows_to_tasks(result.all())
+
     @translate_repository_errors
     async def get_task(self, user_id: UUID, task_id: UUID) -> Task:
         stmt = self._select_tasks_with_tags().where(

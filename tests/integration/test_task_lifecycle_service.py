@@ -612,6 +612,31 @@ async def test_deleted_task_does_not_block_schedule_interval(task_service: TaskS
 
 
 @pytest.mark.asyncio
+async def test_deleted_task_does_not_block_schedule_availability(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    starts_at = datetime(2099, 7, 3, 10, 0)
+    task = await create_task(
+        task_service,
+        title="delete-release-availability",
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(hours=1),
+    )
+
+    # Act
+    await task_service.delete_task(TEST_USER_ID, task.task_id)
+    sut = await task_service.check_schedule_availability(
+        TEST_USER_ID,
+        Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+    )
+
+    # Assert
+    assert sut.can_add_task
+    assert sut.blocking_tasks == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "action",
     (

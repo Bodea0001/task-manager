@@ -186,6 +186,31 @@ async def test_user_free_time_ignores_another_users_schedule(task_service: TaskS
 
 
 @pytest.mark.asyncio
+async def test_schedule_availability_ignores_another_users_schedule(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    window = Schedule(
+        starts_at=datetime(2099, 9, 2, 9, 0),
+        ends_at=datetime(2099, 9, 2, 18, 0),
+    )
+    await create_task(
+        task_service,
+        user_id=TEST_OTHER_USER_ID,
+        title="foreign-availability-window",
+        starts_at=window.starts_at,
+        ends_at=window.ends_at,
+    )
+
+    # Act
+    sut = await task_service.check_schedule_availability(TEST_USER_ID, window)
+
+    # Assert
+    assert sut.can_add_task
+    assert sut.blocking_tasks == []
+
+
+@pytest.mark.asyncio
 async def test_user_schedule_can_overlap_another_users_schedule(
     task_service: TaskService,
 ) -> None:
