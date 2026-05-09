@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from constants import TEST_TITLE_PREFIX
+from constants import TEST_TITLE_PREFIX, TEST_USER_ID
 from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
 from helpers import create_tag, create_task, tag_ids
 from domain.value_objects.tasks import Schedule, TaskStatus
@@ -23,12 +23,13 @@ async def test_user_can_create_a_task(task_service: TaskService) -> None:
 
     # Act
     sut = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}create",
             due_at=ends_at,
             description="Initial description",
             schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
-        )
+        ),
     )
 
     # Assert
@@ -47,11 +48,12 @@ async def test_user_can_create_an_unscheduled_task(task_service: TaskService) ->
 
     # Act
     sut = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}create-unscheduled",
             due_at=due_at,
             description="Initial description",
-        )
+        ),
     )
 
     # Assert
@@ -71,13 +73,14 @@ async def test_user_can_create_a_task_with_tags(
 
     # Act
     sut = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}create-with-tags",
             due_at=ends_at,
             description="Initial description",
             schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
             tag_ids=(tag.tag_id,),
-        )
+        ),
     )
 
     # Assert
@@ -93,13 +96,14 @@ async def test_user_cannot_create_a_task_with_missing_tag(task_service: TaskServ
     # Act / Assert
     with pytest.raises(TagNotFound):
         await task_service.create_task(
+            TEST_USER_ID,
             AddTask(
                 title=f"{TEST_TITLE_PREFIX}create-with-missing-tag",
                 due_at=ends_at,
                 description="Initial description",
                 schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
                 tag_ids=(uuid4(),),
-            )
+            ),
         )
 
 
@@ -119,6 +123,7 @@ async def test_user_cannot_create_task_with_overlapping_schedule(
     # Act / Assert
     with pytest.raises(TaskScheduleOverlap):
         await task_service.create_task(
+            TEST_USER_ID,
             AddTask(
                 title=f"{TEST_TITLE_PREFIX}overlap-create-new",
                 due_at=starts_at + timedelta(hours=2),
@@ -126,7 +131,7 @@ async def test_user_cannot_create_task_with_overlapping_schedule(
                     starts_at=starts_at + timedelta(minutes=30),
                     ends_at=starts_at + timedelta(hours=1, minutes=30),
                 ),
-            )
+            ),
         )
 
 
@@ -163,7 +168,7 @@ async def test_user_can_open_an_existing_task(task_service: TaskService) -> None
     task = await create_task(task_service, title="open")
 
     # Act
-    sut = await task_service.get_task(task.task_id)
+    sut = await task_service.get_task(TEST_USER_ID, task.task_id)
 
     # Assert
     assert sut == task
@@ -181,6 +186,7 @@ async def test_user_can_update_task_details(task_service: TaskService) -> None:
 
     # Act
     sut = await task_service.update_task(
+        TEST_USER_ID,
         task.task_id,
         UpdateTaskData(
             title=f"{TEST_TITLE_PREFIX}updated",
@@ -204,6 +210,7 @@ async def test_user_can_update_task_due_date(task_service: TaskService) -> None:
 
     # Act
     sut = await task_service.update_task(
+        TEST_USER_ID,
         task.task_id,
         UpdateTaskData(due_at=new_due_at),
     )
@@ -228,6 +235,7 @@ async def test_user_can_update_task_due_date_and_schedule_together(
 
     # Act
     sut = await task_service.update_task(
+        TEST_USER_ID,
         task.task_id,
         UpdateTaskData(due_at=new_due_at, schedule=new_schedule),
     )
@@ -242,11 +250,12 @@ async def test_user_can_update_task_due_date_and_schedule_together(
 async def test_user_can_add_schedule_to_unscheduled_task(task_service: TaskService) -> None:
     # Arrange
     task = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}schedule-unscheduled",
             due_at=datetime(2099, 5, 5, 11, 0),
             description="Initial description",
-        )
+        ),
     )
     schedule = Schedule(
         starts_at=datetime(2099, 5, 5, 10, 0),
@@ -254,7 +263,9 @@ async def test_user_can_add_schedule_to_unscheduled_task(task_service: TaskServi
     )
 
     # Act
-    sut = await task_service.update_task(task.task_id, UpdateTaskData(schedule=schedule))
+    sut = await task_service.update_task(
+        TEST_USER_ID, task.task_id, UpdateTaskData(schedule=schedule)
+    )
 
     # Assert
     assert task.schedule is None
@@ -274,15 +285,17 @@ async def test_user_cannot_add_overlapping_schedule_to_unscheduled_task(
         ends_at=starts_at + timedelta(hours=2),
     )
     task = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}overlap-add-schedule-unscheduled",
             due_at=starts_at + timedelta(hours=1),
-        )
+        ),
     )
 
     # Act / Assert
     with pytest.raises(TaskScheduleOverlap):
         await task_service.update_task(
+            TEST_USER_ID,
             task.task_id,
             UpdateTaskData(
                 schedule=Schedule(
@@ -303,7 +316,9 @@ async def test_user_can_replace_existing_task_schedule(task_service: TaskService
     )
 
     # Act
-    sut = await task_service.update_task(task.task_id, UpdateTaskData(schedule=new_schedule))
+    sut = await task_service.update_task(
+        TEST_USER_ID, task.task_id, UpdateTaskData(schedule=new_schedule)
+    )
 
     # Assert
     assert sut.task_id == task.task_id
@@ -332,6 +347,7 @@ async def test_user_cannot_update_task_schedule_to_overlap_another_task(
     # Act / Assert
     with pytest.raises(TaskScheduleOverlap):
         await task_service.update_task(
+            TEST_USER_ID,
             task.task_id,
             UpdateTaskData(
                 schedule=Schedule(
@@ -353,7 +369,7 @@ async def test_user_can_delete_task_schedule(task_service: TaskService) -> None:
     assert task.schedule is not None
 
     # Act
-    sut = await task_service.delete_schedule_from_task(task.task_id)
+    sut = await task_service.delete_schedule_from_task(TEST_USER_ID, task.task_id)
 
     # Assert
     assert sut.task_id == task.task_id
@@ -374,13 +390,14 @@ async def test_deleting_task_schedule_removes_it_from_schedule_filters(
     )
 
     # Act
-    await task_service.delete_schedule_from_task(task.task_id)
+    await task_service.delete_schedule_from_task(TEST_USER_ID, task.task_id)
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_from=datetime(2099, 6, 4, 0, 0),
             starts_to=datetime(2099, 6, 4, 23, 59),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -391,14 +408,15 @@ async def test_deleting_task_schedule_removes_it_from_schedule_filters(
 async def test_user_can_delete_missing_schedule_from_task(task_service: TaskService) -> None:
     # Arrange
     task = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}delete-missing-schedule",
             due_at=datetime(2099, 6, 5, 11, 0),
-        )
+        ),
     )
 
     # Act
-    sut = await task_service.delete_schedule_from_task(task.task_id)
+    sut = await task_service.delete_schedule_from_task(TEST_USER_ID, task.task_id)
 
     # Assert
     assert task.schedule is None
@@ -412,7 +430,7 @@ async def test_user_can_complete_a_task(task_service: TaskService) -> None:
     task = await create_task(task_service, title="complete")
 
     # Act
-    sut = await task_service.complete_task(task.task_id)
+    sut = await task_service.complete_task(TEST_USER_ID, task.task_id)
 
     # Assert
     assert sut.status == TaskStatus.COMPLETED
@@ -425,7 +443,7 @@ async def test_user_can_reopen_a_completed_task(task_service: TaskService) -> No
     task = await create_task(task_service, title="reopen", status=TaskStatus.COMPLETED)
 
     # Act
-    sut = await task_service.reopen_task(task.task_id)
+    sut = await task_service.reopen_task(TEST_USER_ID, task.task_id)
 
     # Assert
     assert sut.status == TaskStatus.ACTIVE
@@ -438,7 +456,7 @@ async def test_user_can_cancel_a_task(task_service: TaskService) -> None:
     task = await create_task(task_service, title="cancel")
 
     # Act
-    sut = await task_service.cancel_task(task.task_id)
+    sut = await task_service.cancel_task(TEST_USER_ID, task.task_id)
 
     # Assert
     assert sut.status == TaskStatus.CANCELLED
@@ -450,11 +468,11 @@ async def test_user_can_delete_a_task(task_service: TaskService) -> None:
     task = await create_task(task_service, title="delete")
 
     # Act
-    await task_service.delete_task(task.task_id)
+    await task_service.delete_task(TEST_USER_ID, task.task_id)
 
     # Assert
     with pytest.raises(TaskNotFound):
-        await task_service.get_task(task.task_id)
+        await task_service.get_task(TEST_USER_ID, task.task_id)
 
 
 @pytest.mark.asyncio
@@ -469,19 +487,20 @@ async def test_deleting_task_removes_it_from_schedule_filters(task_service: Task
     )
 
     # Act
-    await task_service.delete_task(task.task_id)
+    await task_service.delete_task(TEST_USER_ID, task.task_id)
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_from=datetime(2099, 7, 1, 0, 0),
             starts_to=datetime(2099, 7, 1, 23, 59),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
     assert task.task_id not in {item.task_id for item in sut}
     with pytest.raises(TaskNotFound):
-        await task_service.get_task(task.task_id)
+        await task_service.get_task(TEST_USER_ID, task.task_id)
 
 
 @pytest.mark.asyncio
@@ -502,7 +521,7 @@ async def test_user_cannot_act_on_missing_task(task_service: TaskService, action
 
     # Act / Assert
     with pytest.raises(TaskNotFound):
-        await getattr(task_service, action)(task_id)
+        await getattr(task_service, action)(TEST_USER_ID, task_id)
 
 
 @pytest.mark.asyncio
@@ -512,7 +531,9 @@ async def test_user_cannot_update_a_missing_task(task_service: TaskService) -> N
 
     # Act / Assert
     with pytest.raises(TaskNotFound):
-        await task_service.update_task(task_id, UpdateTaskData(title=f"{TEST_TITLE_PREFIX}updated"))
+        await task_service.update_task(
+            TEST_USER_ID, task_id, UpdateTaskData(title=f"{TEST_TITLE_PREFIX}updated")
+        )
 
 
 @pytest.mark.asyncio
@@ -524,6 +545,7 @@ async def test_user_cannot_update_task_with_wrong_interval(task_service: TaskSer
     assert task.schedule is not None
     with pytest.raises(ValueError):
         await task_service.update_task(
+            TEST_USER_ID,
             task.task_id,
             UpdateTaskData(
                 schedule=Schedule(

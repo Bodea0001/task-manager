@@ -31,29 +31,45 @@ def translate_repository_errors(
 
 
 class TagRepository(SQLAlchemyRepository):
-    async def get_tags(self, limit: int | None = None, offset: int | None = None) -> list[Tag]:
-        stmt = select(TagModel).order_by(TagModel.name).limit(limit).offset(offset)
+    async def get_tags(
+        self,
+        user_id: UUID,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[Tag]:
+        stmt = (
+            select(TagModel)
+            .where(TagModel.creator_id == user_id)
+            .order_by(TagModel.name)
+            .limit(limit)
+            .offset(offset)
+        )
 
         result = await self.session.execute(stmt)
         return [self._model_to_tag(model) for model in result.scalars().all()]
 
     @translate_repository_errors
-    async def get_tag(self, tag_id: UUID) -> Tag:
-        stmt = select(TagModel).where(TagModel.tag_id == tag_id)
+    async def get_tag(self, user_id: UUID, tag_id: UUID) -> Tag:
+        stmt = select(TagModel).where(TagModel.creator_id == user_id, TagModel.tag_id == tag_id)
 
         result = await self.session.execute(stmt)
         return self._model_to_tag(result.scalar_one())
 
-    async def exists_tag(self, tag_id: UUID) -> bool:
-        stmt = select(select(1).select_from(TagModel).where(TagModel.tag_id == tag_id).exists())
+    async def exists_tag(self, user_id: UUID, tag_id: UUID) -> bool:
+        stmt = select(
+            select(1)
+            .select_from(TagModel)
+            .where(TagModel.creator_id == user_id, TagModel.tag_id == tag_id)
+            .exists()
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
-    async def ensure_tag(self, name: str) -> Tag:
+    async def ensure_tag(self, user_id: UUID, name: str) -> Tag:
         stmt = (
             pg_insert(TagModel)
-            .values(name=name)
-            .on_conflict_do_nothing(index_elements=["name"])
+            .values(creator_id=user_id, name=name)
+            .on_conflict_do_nothing(index_elements=["creator_id", "name"])
             .returning(TagModel)
         )
 
@@ -61,34 +77,37 @@ class TagRepository(SQLAlchemyRepository):
         tag_model = result.scalar_one_or_none()
 
         if tag_model is None:
-            return await self.get_tag_by_name(name)
+            return await self.get_tag_by_name(user_id, name)
 
         return self._model_to_tag(tag_model)
 
-    async def add_tag(self, name: str) -> Tag:
-        stmt = insert(TagModel).values(name=name).returning(TagModel)
+    async def add_tag(self, user_id: UUID, name: str) -> Tag:
+        stmt = insert(TagModel).values(creator_id=user_id, name=name).returning(TagModel)
 
         result = await self.session.execute(stmt)
         return self._model_to_tag(result.scalar_one())
 
     @translate_repository_errors
-    async def get_tag_by_name(self, name: str) -> Tag:
-        stmt = select(TagModel).where(TagModel.name == name)
+    async def get_tag_by_name(self, user_id: UUID, name: str) -> Tag:
+        stmt = select(TagModel).where(TagModel.creator_id == user_id, TagModel.name == name)
 
         result = await self.session.execute(stmt)
         return self._model_to_tag(result.scalar_one())
 
     @translate_repository_errors
-    async def update_tag(self, tag_id: UUID, name: str) -> Tag:
+    async def update_tag(self, user_id: UUID, tag_id: UUID, name: str) -> Tag:
         stmt = (
-            update(TagModel).values(name=name).where(TagModel.tag_id == tag_id).returning(TagModel)
+            update(TagModel)
+            .values(name=name)
+            .where(TagModel.creator_id == user_id, TagModel.tag_id == tag_id)
+            .returning(TagModel)
         )
 
         result = await self.session.execute(stmt)
         return self._model_to_tag(result.scalar_one())
 
-    async def delete_tag(self, tag_id: UUID) -> None:
-        stmt = delete(TagModel).where(TagModel.tag_id == tag_id)
+    async def delete_tag(self, user_id: UUID, tag_id: UUID) -> None:
+        stmt = delete(TagModel).where(TagModel.creator_id == user_id, TagModel.tag_id == tag_id)
 
         await self.session.execute(stmt)
 

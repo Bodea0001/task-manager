@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from itertools import count
 from uuid import UUID
 
-from constants import TEST_TAG_PREFIX, TEST_TITLE_PREFIX
+from constants import TEST_TAG_PREFIX, TEST_TITLE_PREFIX, TEST_USER_ID
 from domain.value_objects.tags import Tag
 from domain.value_objects.tasks import Schedule, Task, TaskStatus
 from dto.tasks import AddTask
@@ -16,6 +16,7 @@ _DEFAULT_SCHEDULE_SEQUENCE = count()
 async def create_task(
     task_service: TaskService,
     *,
+    user_id: UUID = TEST_USER_ID,
     title: str,
     description: str | None = None,
     tag_ids: tuple[UUID, ...] = (),
@@ -37,6 +38,7 @@ async def create_task(
         description = f"{title} description"
 
     return await task_service.create_task(
+        user_id,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}{title}",
             due_at=due_at,
@@ -44,12 +46,17 @@ async def create_task(
             tag_ids=tag_ids,
             schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
             status=status,
-        )
+        ),
     )
 
 
-async def create_tag(tag_service: TagService, *, name: str) -> Tag:
-    return await tag_service.create_tag(f"{TEST_TAG_PREFIX}{name}")
+async def create_tag(
+    tag_service: TagService,
+    *,
+    user_id: UUID = TEST_USER_ID,
+    name: str,
+) -> Tag:
+    return await tag_service.create_tag(user_id, f"{TEST_TAG_PREFIX}{name}")
 
 
 def task_ids(tasks: list[Task]) -> set:

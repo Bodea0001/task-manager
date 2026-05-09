@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from constants import TEST_TITLE_PREFIX
+from constants import TEST_TITLE_PREFIX, TEST_USER_ID
 from domain.value_objects.tasks import Schedule
 from dto.tasks import AddTask, UpdateTaskData
 from services.tasks import TaskService
@@ -23,12 +23,13 @@ async def test_task_store_is_created_for_new_task(
 
     # Act
     task = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}search-create",
             due_at=starts_at + timedelta(hours=1),
             description="Findable search content",
             schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
-        )
+        ),
     )
 
     # Assert
@@ -43,16 +44,18 @@ async def test_task_store_is_updated_when_task_text_changes(
     # Arrange
     starts_at = datetime(2099, 5, 5, 10, 0)
     task = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}search-update",
             due_at=starts_at + timedelta(hours=1),
             description="Initial search content",
             schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
-        )
+        ),
     )
 
     # Act
     await task_service.update_task(
+        TEST_USER_ID,
         task.task_id,
         UpdateTaskData(description="Updated searchable content"),
     )

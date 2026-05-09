@@ -4,7 +4,7 @@ import pytest
 
 from helpers import create_tag, create_task, task_ids, task_ids_with_test_prefix
 
-from constants import TEST_TITLE_PREFIX
+from constants import TEST_TITLE_PREFIX, TEST_USER_ID
 from dto.tasks import AddTask, ListTasksFilters
 from domain.value_objects.tasks import TaskStatus
 from services.tags import TagService
@@ -29,13 +29,14 @@ async def test_user_can_filter_tasks_by_start_and_end_windows(task_service: Task
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_from=datetime(2099, 8, 1, 0, 0),
             starts_to=datetime(2099, 8, 1, 23, 59),
             ends_from=datetime(2099, 8, 1, 10, 30),
             ends_to=datetime(2099, 8, 1, 11, 30),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -62,11 +63,12 @@ async def test_user_can_filter_tasks_by_start_from_and_end_to(
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_from=datetime(2099, 8, 2, 0, 0),
             ends_to=datetime(2099, 8, 2, 11, 30),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -90,11 +92,12 @@ async def test_user_can_filter_tasks_by_start_to_and_end_from(
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_to=datetime(2099, 8, 3, 10, 30),
             ends_from=datetime(2099, 8, 3, 10, 30),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -129,13 +132,14 @@ async def test_user_can_filter_tasks_by_inclusive_time_boundaries(
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_from=starts_at,
             starts_to=starts_at,
             ends_from=ends_at,
             ends_to=ends_at,
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -153,10 +157,11 @@ async def test_user_can_filter_tasks_by_multiple_statuses(task_service: TaskServ
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             statuses=(TaskStatus.ACTIVE, TaskStatus.COMPLETED),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -174,15 +179,16 @@ async def test_user_can_filter_tasks_by_tag(
     without_tag = await create_task(task_service, title="tag-filter-without")
     tag = await create_tag(tag_service, name="task-filter")
     other_tag = await create_tag(tag_service, name="task-filter-other")
-    await task_service.add_tag_to_task(matching.task_id, tag.tag_id)
-    await task_service.add_tag_to_task(other.task_id, other_tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, matching.task_id, tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, other.task_id, other_tag.tag_id)
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             tag_ids=(tag.tag_id,),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -201,15 +207,16 @@ async def test_user_can_filter_tasks_by_any_of_multiple_tags(
     await create_task(task_service, title="multi-tag-filter-other")
     first_tag = await create_tag(tag_service, name="multi-task-filter-first")
     second_tag = await create_tag(tag_service, name="multi-task-filter-second")
-    await task_service.add_tag_to_task(first.task_id, first_tag.tag_id)
-    await task_service.add_tag_to_task(second.task_id, second_tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, first.task_id, first_tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, second.task_id, second_tag.tag_id)
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             tag_ids=(first_tag.tag_id, second_tag.tag_id),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -226,14 +233,14 @@ async def test_multiple_tag_filter_does_not_duplicate_matching_tasks(
     other = await create_task(task_service, title="multi-tag-no-duplicate-other")
     first_tag = await create_tag(tag_service, name="multi-task-no-duplicate-first")
     second_tag = await create_tag(tag_service, name="multi-task-no-duplicate-second")
-    await task_service.add_tag_to_task(matching.task_id, first_tag.tag_id)
-    await task_service.add_tag_to_task(matching.task_id, second_tag.tag_id)
-    await task_service.add_tag_to_task(other.task_id, second_tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, matching.task_id, first_tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, matching.task_id, second_tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, other.task_id, second_tag.tag_id)
 
     # Act
     filters = ListTasksFilters(tag_ids=(first_tag.tag_id, second_tag.tag_id), limit=1000)
-    tasks = await task_service.get_tasks(filters)
-    count = await task_service.count_tasks(filters)
+    tasks = await task_service.get_tasks(TEST_USER_ID, filters)
+    count = await task_service.count_tasks(TEST_USER_ID, filters)
 
     # Assert
     assert [task.task_id for task in tasks if task.task_id == matching.task_id] == [
@@ -264,11 +271,12 @@ async def test_user_can_filter_tasks_by_due_window(task_service: TaskService) ->
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             due_from=datetime(2099, 8, 2, 0, 0),
             due_to=datetime(2099, 8, 2, 23, 59),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -296,12 +304,13 @@ async def test_empty_search_text_is_ignored(task_service: TaskService) -> None:
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             search_text="",
             due_from=datetime(2099, 8, 4, 0, 0),
             due_to=datetime(2099, 8, 4, 23, 59),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -324,10 +333,11 @@ async def test_user_can_count_tasks_matching_due_window(task_service: TaskServic
 
     # Act
     sut = await task_service.count_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             due_from=datetime(2099, 8, 2, 0, 0),
             due_to=datetime(2099, 8, 2, 23, 59),
-        )
+        ),
     )
 
     # Assert
@@ -338,10 +348,11 @@ async def test_user_can_count_tasks_matching_due_window(task_service: TaskServic
 async def test_unscheduled_task_matches_due_filter(task_service: TaskService) -> None:
     # Arrange
     unscheduled = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}due-filter-unscheduled",
             due_at=datetime(2099, 8, 6, 12, 0),
-        )
+        ),
     )
     await create_task(
         task_service,
@@ -351,11 +362,12 @@ async def test_unscheduled_task_matches_due_filter(task_service: TaskService) ->
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             due_from=datetime(2099, 8, 6, 0, 0),
             due_to=datetime(2099, 8, 6, 23, 59),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -371,19 +383,21 @@ async def test_schedule_filters_exclude_unscheduled_tasks(task_service: TaskServ
         starts_at=datetime(2099, 9, 1, 10, 0),
     )
     unscheduled = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}schedule-filter-unscheduled",
             due_at=datetime(2099, 9, 1, 11, 0),
-        )
+        ),
     )
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_from=datetime(2099, 9, 1, 0, 0),
             starts_to=datetime(2099, 9, 1, 23, 59),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -401,16 +415,16 @@ async def test_deleted_tag_is_removed_from_tag_filters(
     task = await create_task(task_service, title="delete-tag-filter")
     first_tag = await create_tag(tag_service, name="delete-tag-filter-first")
     second_tag = await create_tag(tag_service, name="delete-tag-filter-second")
-    await task_service.add_tag_to_task(task.task_id, first_tag.tag_id)
-    await task_service.add_tag_to_task(task.task_id, second_tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, task.task_id, first_tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, task.task_id, second_tag.tag_id)
 
     # Act
-    await task_service.delete_tag_from_task(task.task_id, first_tag.tag_id)
+    await task_service.delete_tag_from_task(TEST_USER_ID, task.task_id, first_tag.tag_id)
     first_tag_tasks = await task_service.get_tasks(
-        ListTasksFilters(tag_ids=(first_tag.tag_id,), limit=1000)
+        TEST_USER_ID, ListTasksFilters(tag_ids=(first_tag.tag_id,), limit=1000)
     )
     second_tag_tasks = await task_service.get_tasks(
-        ListTasksFilters(tag_ids=(second_tag.tag_id,), limit=1000)
+        TEST_USER_ID, ListTasksFilters(tag_ids=(second_tag.tag_id,), limit=1000)
     )
 
     # Assert
@@ -449,12 +463,13 @@ async def test_user_can_filter_tasks_by_combined_criteria(
         starts_at=datetime(2099, 10, 1, 14, 0),
         status=TaskStatus.ACTIVE,
     )
-    await task_service.add_tag_to_task(matching.task_id, tag.tag_id)
-    await task_service.add_tag_to_task(wrong_status.task_id, tag.tag_id)
-    await task_service.add_tag_to_task(wrong_text.task_id, tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, matching.task_id, tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, wrong_status.task_id, tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, wrong_text.task_id, tag.tag_id)
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             tag_ids=(tag.tag_id,),
             statuses=(TaskStatus.ACTIVE,),
@@ -464,7 +479,7 @@ async def test_user_can_filter_tasks_by_combined_criteria(
             starts_from=datetime(2099, 10, 1, 0, 0),
             starts_to=datetime(2099, 10, 1, 23, 59),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -480,10 +495,10 @@ async def test_user_can_count_tasks_matching_tag_filter(
     matching = await create_task(task_service, title="tag-count-match")
     await create_task(task_service, title="tag-count-other")
     tag = await create_tag(tag_service, name="task-count-filter")
-    await task_service.add_tag_to_task(matching.task_id, tag.tag_id)
+    await task_service.add_tag_to_task(TEST_USER_ID, matching.task_id, tag.tag_id)
 
     # Act
-    sut = await task_service.count_tasks(ListTasksFilters(tag_ids=(tag.tag_id,)))
+    sut = await task_service.count_tasks(TEST_USER_ID, ListTasksFilters(tag_ids=(tag.tag_id,)))
 
     # Assert
     assert sut == 1
@@ -499,10 +514,11 @@ async def test_user_can_filter_tasks_by_search_text_in_title(
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             search_text="roadmap",
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -527,10 +543,11 @@ async def test_user_can_filter_tasks_by_search_text_in_description(
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             search_text="invoice",
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -544,7 +561,7 @@ async def test_user_can_count_tasks_matching_search_text(task_service: TaskServi
     await create_task(task_service, title="another task")
 
     # Act
-    sut = await task_service.count_tasks(ListTasksFilters(search_text="target"))
+    sut = await task_service.count_tasks(TEST_USER_ID, ListTasksFilters(search_text="target"))
 
     # Assert
     assert sut == 1
@@ -560,10 +577,11 @@ async def test_user_can_filter_tasks_by_start_lower_bound(task_service: TaskServ
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_from=datetime(2099, 2, 2, 0, 0),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -582,10 +600,11 @@ async def test_user_can_filter_tasks_by_start_upper_bound(task_service: TaskServ
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_to=datetime(2099, 3, 1, 23, 59),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -602,10 +621,11 @@ async def test_user_can_filter_tasks_by_end_lower_bound(task_service: TaskServic
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             ends_from=datetime(2099, 4, 2, 10, 30),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -624,10 +644,11 @@ async def test_user_can_filter_tasks_by_end_upper_bound(task_service: TaskServic
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             ends_to=datetime(2099, 12, 1, 11, 30),
             limit=1000,
-        )
+        ),
     )
 
     # Assert
@@ -647,12 +668,13 @@ async def test_user_can_paginate_filtered_tasks(task_service: TaskService) -> No
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             starts_from=datetime(2099, 1, 1),
             starts_to=datetime(2099, 1, 4),
             limit=1,
             offset=1,
-        )
+        ),
     )
 
     # Assert
@@ -668,11 +690,12 @@ async def test_user_can_count_tasks_matching_filter(task_service: TaskService) -
 
     # Act
     sut = await task_service.count_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             statuses=(TaskStatus.ACTIVE,),
             starts_from=datetime(2099, 6, 1),
             starts_to=datetime(2099, 6, 2),
-        )
+        ),
     )
 
     # Assert
@@ -687,11 +710,12 @@ async def test_user_can_count_tasks_matching_end_filter(task_service: TaskServic
 
     # Act
     sut = await task_service.count_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             statuses=(TaskStatus.ACTIVE,),
             ends_from=datetime(2099, 10, 1, 10, 30),
             ends_to=datetime(2099, 10, 1, 11, 30),
-        )
+        ),
     )
 
     # Assert

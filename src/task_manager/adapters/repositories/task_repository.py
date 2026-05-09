@@ -46,10 +46,10 @@ def translate_repository_errors(
 
 
 class TaskRepository(SQLAlchemyRepository):
-    async def get_tasks(self, filters: ListTasksFilters) -> list[Task]:
+    async def get_tasks(self, user_id: UUID, filters: ListTasksFilters) -> list[Task]:
         stmt = (
             self._select_task_list_rows_with_tags()
-            .where(*self._build_filters(filters))
+            .where(TaskModel.creator_id == user_id, *self._build_filters(filters))
             .order_by(*self._build_orders(filters))
             .limit(filters.limit)
             .offset(filters.offset)
@@ -61,8 +61,12 @@ class TaskRepository(SQLAlchemyRepository):
         result = await self.session.execute(stmt)
         return self._task_list_rows_to_tasks(result.all())
 
-    async def count_tasks(self, filters: ListTasksFilters) -> int:
-        stmt = select(func.count()).select_from(TaskModel).where(*self._build_filters(filters))
+    async def count_tasks(self, user_id: UUID, filters: ListTasksFilters) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(TaskModel)
+            .where(TaskModel.creator_id == user_id, *self._build_filters(filters))
+        )
 
         for target, condition in self._joins_for_filters(filters):
             stmt = stmt.join(target, condition)
@@ -70,10 +74,14 @@ class TaskRepository(SQLAlchemyRepository):
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
-    async def get_overdue_tasks(self, limit: int, offset: int) -> list[Task]:
+    async def get_overdue_tasks(self, user_id: UUID, limit: int, offset: int) -> list[Task]:
         stmt = (
             self._select_task_list_rows_with_tags()
-            .where(TaskModel.due_at < func.now(), TaskModel.status == TaskStatus.ACTIVE)
+            .where(
+                TaskModel.creator_id == user_id,
+                TaskModel.due_at < func.now(),
+                TaskModel.status == TaskStatus.ACTIVE,
+            )
             .order_by(TaskModel.due_at, TaskModel.created_at)
             .limit(limit)
             .offset(offset)
@@ -82,14 +90,18 @@ class TaskRepository(SQLAlchemyRepository):
         result = await self.session.execute(stmt)
         return self._task_list_rows_to_tasks(result.all())
 
-    async def get_free_time(self, window: Schedule) -> list[FreeTime]:
+    async def get_free_time(self, user_id: UUID, window: Schedule) -> list[FreeTime]:
         stmt = text("""
             WITH busy AS (
                 SELECT
-                    greatest(starts_at, :starts_at) AS starts_at,
-                    least(ends_at, :ends_at) AS ends_at
+                    greatest(scheduled_task.starts_at, :starts_at) AS starts_at,
+                    least(scheduled_task.ends_at, :ends_at) AS ends_at
                 FROM scheduled_task
-                WHERE starts_at < :ends_at AND ends_at > :starts_at
+                JOIN task ON task.task_id = scheduled_task.task_id
+                WHERE
+                    task.creator_id = :user_id
+                    AND scheduled_task.starts_at < :ends_at
+                    AND scheduled_task.ends_at > :starts_at
             ),
             ordered_busy AS (
                 SELECT
@@ -128,76 +140,111 @@ class TaskRepository(SQLAlchemyRepository):
 
         result = await self.session.execute(
             stmt,
-            {"starts_at": window.starts_at, "ends_at": window.ends_at},
+            {"user_id": user_id, "starts_at": window.starts_at, "ends_at": window.ends_at},
         )
         return [self._row_to_free_time(row) for row in result.all()]
 
     @translate_repository_errors
-    async def get_task(self, task_id: UUID) -> Task:
-        stmt = self._select_tasks_with_tags().where(TaskModel.task_id == task_id)
+    async def get_task(self, user_id: UUID, task_id: UUID) -> Task:
+        stmt = self._select_tasks_with_tags().where(
+            TaskModel.creator_id == user_id,
+            TaskModel.task_id == task_id,
+        )
 
         result = await self.session.execute(stmt)
         return self._model_to_task(result.scalar_one())
 
-    async def exists_task(self, task_id: UUID) -> bool:
-        stmt = select(select(1).select_from(TaskModel).where(TaskModel.task_id == task_id).exists())
+    async def exists_task(self, user_id: UUID, task_id: UUID) -> bool:
+        stmt = select(
+            select(1)
+            .select_from(TaskModel)
+            .where(TaskModel.creator_id == user_id, TaskModel.task_id == task_id)
+            .exists()
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one()
 
     @translate_repository_errors
-    async def add_task(self, data: AddTask) -> Task:
-        values = self._task_insert_values(data)
+    async def add_task(self, user_id: UUID, data: AddTask) -> Task:
+        values = {"creator_id": user_id, **self._task_insert_values(data)}
         stmt = insert(TaskModel).values(**values).returning(TaskModel.task_id)
 
         result = await self.session.execute(stmt)
         task_id = result.scalar_one()
-        await self._add_tags_to_task(task_id, data.tag_ids)
-        await self._upsert_task_schedule(task_id, data.schedule)
+        await self._add_tags_to_task(user_id, task_id, data.tag_ids)
+        await self._upsert_task_schedule(user_id, task_id, data.schedule)
 
-        return await self.get_task(task_id)
-
-    @translate_repository_errors
-    async def add_tag_to_task(self, task_id: UUID, tag_id: UUID) -> None:
-        await self._add_tags_to_task(task_id, (tag_id,))
+        return await self.get_task(user_id, task_id)
 
     @translate_repository_errors
-    async def add_schedule_to_task(self, task_id: UUID, schedule: Schedule) -> None:
-        await self._upsert_task_schedule(task_id, schedule)
+    async def add_tag_to_task(self, user_id: UUID, task_id: UUID, tag_id: UUID) -> None:
+        await self._add_tags_to_task(user_id, task_id, (tag_id,))
 
     @translate_repository_errors
-    async def update_task(self, task_id: UUID, data: UpdateTaskData) -> Task:
+    async def add_schedule_to_task(self, user_id: UUID, task_id: UUID, schedule: Schedule) -> None:
+        await self._upsert_task_schedule(user_id, task_id, schedule)
+
+    @translate_repository_errors
+    async def update_task(self, user_id: UUID, task_id: UUID, data: UpdateTaskData) -> Task:
         values = self._task_update_values(data)
 
-        stmt = update(TaskModel).values(**values).where(TaskModel.task_id == task_id)
+        stmt = (
+            update(TaskModel)
+            .values(**values)
+            .where(TaskModel.creator_id == user_id, TaskModel.task_id == task_id)
+        )
 
         if values:
             await self.session.execute(stmt)
-        await self._upsert_task_schedule(task_id, data.schedule)
-        return await self.get_task(task_id)
+        await self._upsert_task_schedule(user_id, task_id, data.schedule)
+        return await self.get_task(user_id, task_id)
 
-    async def delete_task(self, task_id: UUID) -> None:
-        stmt = delete(TaskModel).where(TaskModel.task_id == task_id)
-
-        await self.session.execute(stmt)
-
-    async def delete_tag_from_task(self, task_id: UUID, tag_id: UUID) -> None:
-        stmt = delete(TaskTagModel).where(
-            TaskTagModel.task_id == task_id,
-            TaskTagModel.tag_id == tag_id,
+    async def delete_task(self, user_id: UUID, task_id: UUID) -> None:
+        stmt = delete(TaskModel).where(
+            TaskModel.creator_id == user_id, TaskModel.task_id == task_id
         )
 
         await self.session.execute(stmt)
 
-    async def delete_schedule_from_task(self, task_id: UUID) -> None:
-        stmt = delete(ScheduledTaskModel).where(ScheduledTaskModel.task_id == task_id)
+    async def delete_tag_from_task(self, user_id: UUID, task_id: UUID, tag_id: UUID) -> None:
+        stmt = delete(TaskTagModel).where(
+            TaskTagModel.task_id == task_id,
+            TaskTagModel.tag_id == tag_id,
+            select(1)
+            .select_from(TaskModel)
+            .where(TaskModel.creator_id == user_id, TaskModel.task_id == TaskTagModel.task_id)
+            .exists(),
+            select(1)
+            .select_from(TagModel)
+            .where(TagModel.creator_id == user_id, TagModel.tag_id == TaskTagModel.tag_id)
+            .exists(),
+        )
 
         await self.session.execute(stmt)
 
-    async def _add_tags_to_task(self, task_id: UUID, tag_ids: tuple[UUID, ...]) -> None:
+    async def delete_schedule_from_task(self, user_id: UUID, task_id: UUID) -> None:
+        stmt = delete(ScheduledTaskModel).where(
+            ScheduledTaskModel.task_id == task_id,
+            select(1)
+            .select_from(TaskModel)
+            .where(TaskModel.creator_id == user_id, TaskModel.task_id == ScheduledTaskModel.task_id)
+            .exists(),
+        )
+
+        await self.session.execute(stmt)
+
+    async def _add_tags_to_task(
+        self,
+        user_id: UUID,
+        task_id: UUID,
+        tag_ids: tuple[UUID, ...],
+    ) -> None:
         unique_tag_ids = set(tag_ids)
 
         if not unique_tag_ids:
             return
+
+        await self._raise_if_tags_do_not_belong_to_user(user_id, unique_tag_ids)
 
         stmt = (
             pg_insert(TaskTagModel)
@@ -207,11 +254,31 @@ class TaskRepository(SQLAlchemyRepository):
 
         await self.session.execute(stmt)
 
-    async def _upsert_task_schedule(self, task_id: UUID, schedule: Schedule | None):
+    async def _raise_if_tags_do_not_belong_to_user(
+        self,
+        user_id: UUID,
+        tag_ids: set[UUID],
+    ) -> None:
+        stmt = (
+            select(func.count())
+            .select_from(TagModel)
+            .where(TagModel.creator_id == user_id, TagModel.tag_id.in_(tag_ids))
+        )
+
+        result = await self.session.execute(stmt)
+        if result.scalar_one() != len(tag_ids):
+            raise app_exc.TagNotFound
+
+    async def _upsert_task_schedule(
+        self,
+        user_id: UUID,
+        task_id: UUID,
+        schedule: Schedule | None,
+    ):
         if not schedule:
             return
 
-        await self._raise_if_schedule_overlaps(task_id, schedule)
+        await self._raise_if_schedule_overlaps(user_id, task_id, schedule)
 
         values = asdict(schedule)
 
@@ -223,11 +290,18 @@ class TaskRepository(SQLAlchemyRepository):
 
         await self.session.execute(stmt)
 
-    async def _raise_if_schedule_overlaps(self, task_id: UUID, schedule: Schedule) -> None:
+    async def _raise_if_schedule_overlaps(
+        self,
+        user_id: UUID,
+        task_id: UUID,
+        schedule: Schedule,
+    ) -> None:
         stmt = select(
             select(1)
             .select_from(ScheduledTaskModel)
+            .join(TaskModel, TaskModel.task_id == ScheduledTaskModel.task_id)
             .where(
+                TaskModel.creator_id == user_id,
                 ScheduledTaskModel.task_id != task_id,
                 ScheduledTaskModel.starts_at < schedule.ends_at,
                 ScheduledTaskModel.ends_at > schedule.starts_at,

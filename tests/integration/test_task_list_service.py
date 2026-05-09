@@ -4,7 +4,7 @@ import pytest
 
 from helpers import create_task, task_ids_with_test_prefix
 
-from constants import TEST_TITLE_PREFIX
+from constants import TEST_TITLE_PREFIX, TEST_USER_ID
 from dto.tasks import AddTask, ListTasksFilters
 from domain.value_objects.tasks import FreeTime, Schedule, TaskStatus
 from services.tasks import TaskService
@@ -21,7 +21,7 @@ async def test_user_can_view_active_tasks(task_service: TaskService) -> None:
     await create_task(task_service, title="completed", status=TaskStatus.COMPLETED)
 
     # Act
-    sut = await task_service.get_active_tasks(limit=1000)
+    sut = await task_service.get_active_tasks(TEST_USER_ID, limit=1000)
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {first_active.task_id, second_active.task_id}
@@ -39,7 +39,7 @@ async def test_user_can_view_completed_tasks(task_service: TaskService) -> None:
     )
 
     # Act
-    sut = await task_service.get_completed_tasks(limit=1000)
+    sut = await task_service.get_completed_tasks(TEST_USER_ID, limit=1000)
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {first_completed.task_id, second_completed.task_id}
@@ -52,7 +52,7 @@ async def test_user_can_view_tasks_with_default_filters(task_service: TaskServic
     second = await create_task(task_service, title="default-list-second")
 
     # Act
-    sut = await task_service.get_tasks()
+    sut = await task_service.get_tasks(TEST_USER_ID)
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {first.task_id, second.task_id}
@@ -64,7 +64,7 @@ async def test_user_can_count_tasks_with_default_filters(task_service: TaskServi
     await create_task(task_service, title="default-count")
 
     # Act
-    sut = await task_service.count_tasks()
+    sut = await task_service.count_tasks(TEST_USER_ID)
 
     # Assert
     assert sut >= 1
@@ -91,12 +91,13 @@ async def test_user_can_paginate_tasks_ordered_by_due_date(task_service: TaskSer
 
     # Act
     sut = await task_service.get_tasks(
+        TEST_USER_ID,
         ListTasksFilters(
             due_from=datetime(2099, 7, 1),
             due_to=datetime(2099, 7, 4),
             limit=1,
             offset=1,
-        )
+        ),
     )
 
     # Assert
@@ -120,7 +121,7 @@ async def test_user_can_view_overdue_tasks(task_service: TaskService) -> None:
     await create_task(task_service, title="future", starts_at=datetime(2099, 6, 1, 10, 0))
 
     # Act
-    sut = await task_service.get_overdue_tasks(limit=1000)
+    sut = await task_service.get_overdue_tasks(TEST_USER_ID, limit=1000)
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {first_overdue.task_id, second_overdue.task_id}
@@ -130,6 +131,7 @@ async def test_user_can_view_overdue_tasks(task_service: TaskService) -> None:
 async def test_overdue_tasks_are_selected_by_due_date(task_service: TaskService) -> None:
     # Arrange
     overdue = await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}overdue-by-due",
             due_at=datetime(2001, 1, 1, 9, 0),
@@ -137,9 +139,10 @@ async def test_overdue_tasks_are_selected_by_due_date(task_service: TaskService)
                 starts_at=datetime(2099, 1, 1, 10, 0),
                 ends_at=datetime(2099, 1, 1, 11, 0),
             ),
-        )
+        ),
     )
     await task_service.create_task(
+        TEST_USER_ID,
         AddTask(
             title=f"{TEST_TITLE_PREFIX}not-overdue-by-due",
             due_at=datetime(2099, 1, 1, 9, 0),
@@ -147,11 +150,11 @@ async def test_overdue_tasks_are_selected_by_due_date(task_service: TaskService)
                 starts_at=datetime(2001, 1, 1, 10, 0),
                 ends_at=datetime(2001, 1, 1, 11, 0),
             ),
-        )
+        ),
     )
 
     # Act
-    sut = await task_service.get_overdue_tasks(limit=1000)
+    sut = await task_service.get_overdue_tasks(TEST_USER_ID, limit=1000)
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {overdue.task_id}
@@ -166,7 +169,7 @@ async def test_user_can_view_free_time_for_empty_schedule(task_service: TaskServ
     )
 
     # Act
-    sut = await task_service.get_free_time(window)
+    sut = await task_service.get_free_time(TEST_USER_ID, window)
 
     # Assert
     assert sut == [FreeTime(starts_at=window.starts_at, ends_at=window.ends_at)]
@@ -192,10 +195,11 @@ async def test_user_can_view_sorted_free_time_between_scheduled_tasks(
 
     # Act
     sut = await task_service.get_free_time(
+        TEST_USER_ID,
         Schedule(
             starts_at=datetime(2099, 8, 2, 9, 0),
             ends_at=datetime(2099, 8, 2, 15, 0),
-        )
+        ),
     )
 
     # Assert
@@ -235,10 +239,11 @@ async def test_free_time_view_clips_scheduled_tasks_to_window(
 
     # Act
     sut = await task_service.get_free_time(
+        TEST_USER_ID,
         Schedule(
             starts_at=datetime(2099, 8, 3, 9, 0),
             ends_at=datetime(2099, 8, 3, 18, 0),
-        )
+        ),
     )
 
     # Assert
@@ -264,10 +269,11 @@ async def test_free_time_view_returns_empty_list_when_window_is_fully_busy(
 
     # Act
     sut = await task_service.get_free_time(
+        TEST_USER_ID,
         Schedule(
             starts_at=datetime(2099, 8, 4, 9, 0),
             ends_at=datetime(2099, 8, 4, 18, 0),
-        )
+        ),
     )
 
     # Assert
