@@ -10,17 +10,16 @@ mark it as done, find related tasks, or organize tasks for later.
 
 ## What It Does
 
-- Creates tasks with a title, description, due date, schedule, status, and
-  priority.
-- Shows active, completed, cancelled, and overdue tasks.
-- Updates task details when plans change.
-- Completes, reopens, cancels, and deletes tasks.
-- Finds tasks by status, priority, due date, scheduled time, text, and tags.
-- Creates tasks with tags when the context is already known.
-- Adds and removes tags from existing tasks.
-- Counts tasks that match selected filters.
-- Shows free time between scheduled tasks.
-- Keeps each user's tasks and tags separate from other users.
+- Helps users remember what needs to be done and when.
+- Keeps upcoming, overdue, completed, and cancelled work easy to review.
+- Helps users plan time for focused work without creating schedule conflicts.
+- Makes it easy to change plans when deadlines, priorities, or details move.
+- Connects related work with lightweight context, such as projects, people, or
+  topics.
+- Helps users find the task they mean, even when they do not remember its exact
+  name.
+- Keeps a clear record of important changes so users can understand what
+  happened.
 
 ## How the Assistant Should Work
 
@@ -86,6 +85,7 @@ Find tasks:
 - "Show tasks due this week."
 - "Show tasks scheduled for tomorrow."
 - "How many active tasks do I have?"
+- "Show what changed on the report task."
 
 Work with tags and context:
 
@@ -94,15 +94,26 @@ Work with tags and context:
 - "Create a tag for hiring and add the interview task to it."
 - "Remove the personal tag from the passport task."
 - "Rename the errands tag to personal errands."
+- "Show the history of the finance tag."
 
 ## Project Status
 
-The core task, tag, user, authentication, schedule, and search workflows are
-implemented.
+Implemented product areas:
 
-The project currently includes domain models, DTOs, repositories, services,
-database migrations, and tests. A production user interface, HTTP API, or final
-AI-agent integration is not included yet.
+- Tasks: creation, updates, deadlines, scheduling, priorities, status changes,
+  removal, search, counts, free-time lookup, and change history.
+- Tags and context: tag creation, renaming, removal, task tagging, contextual
+  lookup, and change history.
+- Users and access: user accounts, authentication, and per-user data access.
+
+The codebase includes domain models, DTOs, repositories, services, database
+migrations, and tests.
+
+Not included yet:
+
+- Production user interface.
+- HTTP API.
+- Final AI-agent integration.
 
 ## Development
 
