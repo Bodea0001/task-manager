@@ -25,6 +25,15 @@ class DatabaseConfig(BaseModel):
         return f"{self.database}+{self.driver}://{self.user}:{self.password}@{self.host}:{self.port}/{self.name}"
 
 
+class AuthConfig(BaseModel):
+    jwt_secret: str = "dev-only-change-me-with-at-least-32-bytes"
+    jwt_algorithm: str = "HS256"
+    password_salt: str = "dev-only-password-salt"
+    access_token_ttl_minutes: int = 30
+    refresh_token_ttl_days: int = 30
+    refresh_token_session_limit: int = 5
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         case_sensitive=False,
@@ -33,6 +42,7 @@ class Settings(BaseSettings):
     )
 
     db: DatabaseConfig
+    auth: AuthConfig = AuthConfig()
 
 
 settings = Settings()  # type: ignore
