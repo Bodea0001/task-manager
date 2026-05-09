@@ -48,7 +48,7 @@ class UserAuth(Base):
 
     user_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("user.user_id", ondelete="CASCADE"),
+        ForeignKey("user.user_id"),
         primary_key=True,
         comment="Идентификатор пользователя",
     )
@@ -65,7 +65,7 @@ class UserRefreshToken(Base):
     token_id: Mapped[uuidpk]
     user_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("user.user_id", ondelete="CASCADE"),
+        ForeignKey("user.user_id"),
         index=True,
         comment="Идентификатор пользователя",
     )

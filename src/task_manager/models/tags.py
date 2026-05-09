@@ -1,9 +1,10 @@
 from uuid import UUID
 from typing import TYPE_CHECKING
+from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, UniqueConstraint
+from sqlalchemy import Index, CheckConstraint, ForeignKey
 from sqlalchemy.orm import Mapped, relationship, mapped_column
-from sqlalchemy.types import String, Uuid
+from sqlalchemy.types import String, Uuid, TIMESTAMP
 
 from models.base import Base
 from models.dependencies import created_at, uuidpk
@@ -24,6 +25,9 @@ class Tag(Base):
         comment="Идентификатор создателя тега",
     )
     created_at: Mapped[created_at]
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True, comment="Дата/время мягкого удаления тега"
+    )
 
     creator: Mapped["User"] = relationship("User", back_populates="created_tags")
     tasks: Mapped[list[Task]] = relationship(
@@ -34,5 +38,11 @@ class Tag(Base):
 
     __table_args__ = (
         CheckConstraint("length(name) > 0", "non_empty_name"),
-        UniqueConstraint("creator_id", "name"),
+        Index(
+            "ix_tag_active_creator_id_name",
+            "creator_id",
+            "name",
+            unique=True,
+            postgresql_where=deleted_at.is_(None),
+        ),
     )

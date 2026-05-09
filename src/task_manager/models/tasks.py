@@ -42,6 +42,9 @@ class Task(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True, comment="Дата/время окончания задачи"
     )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True, comment="Дата/время мягкого удаления задачи"
+    )
 
     tags: Mapped[list["Tag"]] = relationship(
         "Tag", secondary="task_tag", viewonly=True, order_by="Tag.name"
@@ -66,7 +69,7 @@ class ScheduledTask(Base):
 
     task_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("task.task_id", ondelete="CASCADE"),
+        ForeignKey("task.task_id"),
         primary_key=True,
         comment="Идентификатор задачи",
     )
@@ -92,7 +95,7 @@ class TaskStore(Base):
 
     task_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("task.task_id", ondelete="CASCADE"),
+        ForeignKey("task.task_id"),
         primary_key=True,
         comment="Идентификатор задачи",
     )

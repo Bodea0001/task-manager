@@ -13,13 +13,13 @@ class TaskTag(Base):
 
     task_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("task.task_id", ondelete="CASCADE"),
+        ForeignKey("task.task_id"),
         primary_key=True,
         comment="Идентификатор задачи",
     )
     tag_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("tag.tag_id", ondelete="CASCADE"),
+        ForeignKey("tag.tag_id"),
         primary_key=True,
         comment="Идентификатор тега",
     )

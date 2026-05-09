@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from constants import TEST_TITLE_PREFIX, TEST_USER_ID
 from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
@@ -482,7 +484,10 @@ async def test_user_can_cancel_a_task(task_service: TaskService) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_can_delete_a_task(task_service: TaskService) -> None:
+async def test_user_can_delete_a_task(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+) -> None:
     # Arrange
     task = await create_task(task_service, title="delete")
 
@@ -492,6 +497,17 @@ async def test_user_can_delete_a_task(task_service: TaskService) -> None:
     # Assert
     with pytest.raises(TaskNotFound):
         await task_service.get_task(TEST_USER_ID, task.task_id)
+
+    async with test_engine.connect() as connection:
+        result = await connection.execute(
+            text("""
+                SELECT deleted_at IS NOT NULL
+                FROM task
+                WHERE task_id = :task_id
+            """),
+            {"task_id": task.task_id},
+        )
+        assert result.scalar_one()
 
 
 @pytest.mark.asyncio
@@ -520,6 +536,79 @@ async def test_deleting_task_removes_it_from_schedule_filters(task_service: Task
     assert task.task_id not in {item.task_id for item in sut}
     with pytest.raises(TaskNotFound):
         await task_service.get_task(TEST_USER_ID, task.task_id)
+
+
+@pytest.mark.asyncio
+async def test_deleted_task_is_excluded_from_task_list_and_count(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    deleted_task = await create_task(task_service, title="deleted-list-count")
+    visible_task = await create_task(task_service, title="visible-list-count")
+
+    # Act
+    await task_service.delete_task(TEST_USER_ID, deleted_task.task_id)
+    tasks = await task_service.get_tasks(TEST_USER_ID, ListTasksFilters(limit=1000))
+    count = await task_service.count_tasks(TEST_USER_ID)
+
+    # Assert
+    listed_task_ids = {task.task_id for task in tasks}
+    assert deleted_task.task_id not in listed_task_ids
+    assert visible_task.task_id in listed_task_ids
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_deleted_task_is_excluded_from_overdue_tasks(task_service: TaskService) -> None:
+    # Arrange
+    overdue_at = datetime(2026, 1, 1, 10, 0)
+    deleted_task = await create_task(
+        task_service,
+        title="deleted-overdue",
+        due_at=overdue_at,
+        starts_at=overdue_at - timedelta(hours=1),
+        ends_at=overdue_at,
+    )
+    visible_task = await create_task(
+        task_service,
+        title="visible-overdue",
+        due_at=overdue_at + timedelta(hours=1),
+        starts_at=overdue_at + timedelta(hours=1),
+        ends_at=overdue_at + timedelta(hours=2),
+    )
+
+    # Act
+    await task_service.delete_task(TEST_USER_ID, deleted_task.task_id)
+    tasks = await task_service.get_overdue_tasks(TEST_USER_ID, limit=1000)
+
+    # Assert
+    overdue_task_ids = {task.task_id for task in tasks}
+    assert deleted_task.task_id not in overdue_task_ids
+    assert visible_task.task_id in overdue_task_ids
+
+
+@pytest.mark.asyncio
+async def test_deleted_task_does_not_block_schedule_interval(task_service: TaskService) -> None:
+    # Arrange
+    starts_at = datetime(2099, 7, 2, 10, 0)
+    task = await create_task(
+        task_service,
+        title="delete-release-schedule",
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(hours=1),
+    )
+
+    # Act
+    await task_service.delete_task(TEST_USER_ID, task.task_id)
+    sut = await create_task(
+        task_service,
+        title="reused-deleted-schedule",
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(hours=1),
+    )
+
+    # Assert
+    assert sut.task_id != task.task_id
 
 
 @pytest.mark.asyncio

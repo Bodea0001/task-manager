@@ -49,7 +49,11 @@ class TaskRepository(SQLAlchemyRepository):
     async def get_tasks(self, user_id: UUID, filters: ListTasksFilters) -> list[Task]:
         stmt = (
             self._select_task_list_rows_with_tags()
-            .where(TaskModel.creator_id == user_id, *self._build_filters(filters))
+            .where(
+                TaskModel.creator_id == user_id,
+                self._task_is_not_deleted(),
+                *self._build_filters(filters),
+            )
             .order_by(*self._build_orders(filters))
             .limit(filters.limit)
             .offset(filters.offset)
@@ -65,7 +69,11 @@ class TaskRepository(SQLAlchemyRepository):
         stmt = (
             select(func.count())
             .select_from(TaskModel)
-            .where(TaskModel.creator_id == user_id, *self._build_filters(filters))
+            .where(
+                TaskModel.creator_id == user_id,
+                self._task_is_not_deleted(),
+                *self._build_filters(filters),
+            )
         )
 
         for target, condition in self._joins_for_filters(filters):
@@ -79,6 +87,7 @@ class TaskRepository(SQLAlchemyRepository):
             self._select_task_list_rows_with_tags()
             .where(
                 TaskModel.creator_id == user_id,
+                self._task_is_not_deleted(),
                 TaskModel.due_at < func.now(),
                 TaskModel.status == TaskStatus.ACTIVE,
             )
@@ -100,6 +109,7 @@ class TaskRepository(SQLAlchemyRepository):
                 JOIN task ON task.task_id = scheduled_task.task_id
                 WHERE
                     task.creator_id = :user_id
+                    AND task.deleted_at IS NULL
                     AND scheduled_task.starts_at < :ends_at
                     AND scheduled_task.ends_at > :starts_at
             ),
@@ -149,6 +159,7 @@ class TaskRepository(SQLAlchemyRepository):
         stmt = self._select_tasks_with_tags().where(
             TaskModel.creator_id == user_id,
             TaskModel.task_id == task_id,
+            self._task_is_not_deleted(),
         )
 
         result = await self.session.execute(stmt)
@@ -158,7 +169,11 @@ class TaskRepository(SQLAlchemyRepository):
         stmt = select(
             select(1)
             .select_from(TaskModel)
-            .where(TaskModel.creator_id == user_id, TaskModel.task_id == task_id)
+            .where(
+                TaskModel.creator_id == user_id,
+                TaskModel.task_id == task_id,
+                self._task_is_not_deleted(),
+            )
             .exists()
         )
         result = await self.session.execute(stmt)
@@ -191,7 +206,11 @@ class TaskRepository(SQLAlchemyRepository):
         stmt = (
             update(TaskModel)
             .values(**values)
-            .where(TaskModel.creator_id == user_id, TaskModel.task_id == task_id)
+            .where(
+                TaskModel.creator_id == user_id,
+                TaskModel.task_id == task_id,
+                self._task_is_not_deleted(),
+            )
         )
 
         if values:
@@ -201,7 +220,9 @@ class TaskRepository(SQLAlchemyRepository):
 
     async def delete_task(self, user_id: UUID, task_id: UUID) -> None:
         stmt = delete(TaskModel).where(
-            TaskModel.creator_id == user_id, TaskModel.task_id == task_id
+            TaskModel.creator_id == user_id,
+            TaskModel.task_id == task_id,
+            self._task_is_not_deleted(),
         )
 
         await self.session.execute(stmt)
@@ -213,10 +234,15 @@ class TaskRepository(SQLAlchemyRepository):
             select(1)
             .select_from(TaskModel)
             .where(TaskModel.creator_id == user_id, TaskModel.task_id == TaskTagModel.task_id)
+            .where(self._task_is_not_deleted())
             .exists(),
             select(1)
             .select_from(TagModel)
-            .where(TagModel.creator_id == user_id, TagModel.tag_id == TaskTagModel.tag_id)
+            .where(
+                TagModel.creator_id == user_id,
+                TagModel.tag_id == TaskTagModel.tag_id,
+                self._tag_is_not_deleted(),
+            )
             .exists(),
         )
 
@@ -228,6 +254,7 @@ class TaskRepository(SQLAlchemyRepository):
             select(1)
             .select_from(TaskModel)
             .where(TaskModel.creator_id == user_id, TaskModel.task_id == ScheduledTaskModel.task_id)
+            .where(self._task_is_not_deleted())
             .exists(),
         )
 
@@ -262,7 +289,11 @@ class TaskRepository(SQLAlchemyRepository):
         stmt = (
             select(func.count())
             .select_from(TagModel)
-            .where(TagModel.creator_id == user_id, TagModel.tag_id.in_(tag_ids))
+            .where(
+                TagModel.creator_id == user_id,
+                TagModel.tag_id.in_(tag_ids),
+                self._tag_is_not_deleted(),
+            )
         )
 
         result = await self.session.execute(stmt)
@@ -302,6 +333,7 @@ class TaskRepository(SQLAlchemyRepository):
             .join(TaskModel, TaskModel.task_id == ScheduledTaskModel.task_id)
             .where(
                 TaskModel.creator_id == user_id,
+                self._task_is_not_deleted(),
                 ScheduledTaskModel.task_id != task_id,
                 ScheduledTaskModel.starts_at < schedule.ends_at,
                 ScheduledTaskModel.ends_at > schedule.starts_at,
@@ -316,6 +348,14 @@ class TaskRepository(SQLAlchemyRepository):
     @staticmethod
     def _select_tasks_with_tags():
         return select(TaskModel).options(selectinload(TaskModel.tags))
+
+    @staticmethod
+    def _task_is_not_deleted():
+        return TaskModel.deleted_at.is_(None)
+
+    @staticmethod
+    def _tag_is_not_deleted():
+        return TagModel.deleted_at.is_(None)
 
     @classmethod
     def _select_task_list_rows_with_tags(cls):
@@ -370,6 +410,13 @@ class TaskRepository(SQLAlchemyRepository):
                 .where(
                     TaskTagModel.task_id == TaskModel.task_id,
                     TaskTagModel.tag_id.in_(filters.tag_ids),
+                    select(1)
+                    .select_from(TagModel)
+                    .where(
+                        TagModel.tag_id == TaskTagModel.tag_id,
+                        TaskRepository._tag_is_not_deleted(),
+                    )
+                    .exists(),
                 )
                 .exists()
             )
@@ -449,7 +496,7 @@ class TaskRepository(SQLAlchemyRepository):
         else:
             description = short_description
 
-        tags = [TaskRepository._model_to_tag(tag) for tag in model.tags]
+        tags = [TaskRepository._model_to_tag(tag) for tag in model.tags if tag.deleted_at is None]
 
         schedule = TaskRepository._model_to_schedule(model.schedule) if model.schedule else None
 

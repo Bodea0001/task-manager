@@ -222,6 +222,29 @@ async def test_user_can_filter_tasks_by_tag(
 
 
 @pytest.mark.asyncio
+async def test_deleted_tag_is_excluded_from_task_filters(
+    task_service: TaskService,
+    tag_service: TagService,
+) -> None:
+    # Arrange
+    task = await create_task(task_service, title="deleted-tag-filter")
+    tag = await create_tag(tag_service, name="deleted-task-filter")
+    await task_service.add_tag_to_task(TEST_USER_ID, task.task_id, tag.tag_id)
+
+    # Act
+    await tag_service.delete_tag(TEST_USER_ID, tag.tag_id)
+    tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(tag_ids=(tag.tag_id,), limit=1000),
+    )
+    count = await task_service.count_tasks(TEST_USER_ID, ListTasksFilters(tag_ids=(tag.tag_id,)))
+
+    # Assert
+    assert task.task_id not in task_ids(tasks)
+    assert count == 0
+
+
+@pytest.mark.asyncio
 async def test_user_can_filter_tasks_by_any_of_multiple_tags(
     task_service: TaskService,
     tag_service: TagService,

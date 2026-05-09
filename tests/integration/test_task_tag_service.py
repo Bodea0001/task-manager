@@ -45,6 +45,23 @@ async def test_user_can_open_task_with_tags(
 
 
 @pytest.mark.asyncio
+async def test_deleted_tag_is_hidden_from_task_tags(
+    task_service: TaskService, tag_service: TagService
+) -> None:
+    # Arrange
+    task = await create_task(task_service, title="hidden-deleted-tag")
+    tag = await create_tag(tag_service, name="hidden-from-task")
+    await task_service.add_tag_to_task(TEST_USER_ID, task.task_id, tag.tag_id)
+
+    # Act
+    await tag_service.delete_tag(TEST_USER_ID, tag.tag_id)
+    sut = await task_service.get_task(TEST_USER_ID, task.task_id)
+
+    # Assert
+    assert tag.tag_id not in tag_ids(sut.tags)
+
+
+@pytest.mark.asyncio
 async def test_user_can_view_tasks_with_tags(
     task_service: TaskService, tag_service: TagService
 ) -> None:
@@ -104,3 +121,18 @@ async def test_user_cannot_use_missing_tag_for_task(task_service: TaskService, a
     # Act / Assert
     with pytest.raises(TagNotFound):
         await getattr(task_service, action)(TEST_USER_ID, task.task_id, uuid4())
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_add_deleted_tag_to_task(
+    task_service: TaskService,
+    tag_service: TagService,
+) -> None:
+    # Arrange
+    task = await create_task(task_service, title="add-deleted-tag")
+    tag = await create_tag(tag_service, name="deleted-add-to-task")
+    await tag_service.delete_tag(TEST_USER_ID, tag.tag_id)
+
+    # Act / Assert
+    with pytest.raises(TagNotFound):
+        await task_service.add_tag_to_task(TEST_USER_ID, task.task_id, tag.tag_id)

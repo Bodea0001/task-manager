@@ -39,7 +39,7 @@ class TagRepository(SQLAlchemyRepository):
     ) -> list[Tag]:
         stmt = (
             select(TagModel)
-            .where(TagModel.creator_id == user_id)
+            .where(TagModel.creator_id == user_id, self._tag_is_not_deleted())
             .order_by(TagModel.name)
             .limit(limit)
             .offset(offset)
@@ -50,7 +50,11 @@ class TagRepository(SQLAlchemyRepository):
 
     @translate_repository_errors
     async def get_tag(self, user_id: UUID, tag_id: UUID) -> Tag:
-        stmt = select(TagModel).where(TagModel.creator_id == user_id, TagModel.tag_id == tag_id)
+        stmt = select(TagModel).where(
+            TagModel.creator_id == user_id,
+            TagModel.tag_id == tag_id,
+            self._tag_is_not_deleted(),
+        )
 
         result = await self.session.execute(stmt)
         return self._model_to_tag(result.scalar_one())
@@ -59,7 +63,11 @@ class TagRepository(SQLAlchemyRepository):
         stmt = select(
             select(1)
             .select_from(TagModel)
-            .where(TagModel.creator_id == user_id, TagModel.tag_id == tag_id)
+            .where(
+                TagModel.creator_id == user_id,
+                TagModel.tag_id == tag_id,
+                self._tag_is_not_deleted(),
+            )
             .exists()
         )
         result = await self.session.execute(stmt)
@@ -69,7 +77,10 @@ class TagRepository(SQLAlchemyRepository):
         stmt = (
             pg_insert(TagModel)
             .values(creator_id=user_id, name=name)
-            .on_conflict_do_nothing(index_elements=["creator_id", "name"])
+            .on_conflict_do_nothing(
+                index_elements=["creator_id", "name"],
+                index_where=self._tag_is_not_deleted(),
+            )
             .returning(TagModel)
         )
 
@@ -89,7 +100,11 @@ class TagRepository(SQLAlchemyRepository):
 
     @translate_repository_errors
     async def get_tag_by_name(self, user_id: UUID, name: str) -> Tag:
-        stmt = select(TagModel).where(TagModel.creator_id == user_id, TagModel.name == name)
+        stmt = select(TagModel).where(
+            TagModel.creator_id == user_id,
+            TagModel.name == name,
+            self._tag_is_not_deleted(),
+        )
 
         result = await self.session.execute(stmt)
         return self._model_to_tag(result.scalar_one())
@@ -99,7 +114,11 @@ class TagRepository(SQLAlchemyRepository):
         stmt = (
             update(TagModel)
             .values(name=name)
-            .where(TagModel.creator_id == user_id, TagModel.tag_id == tag_id)
+            .where(
+                TagModel.creator_id == user_id,
+                TagModel.tag_id == tag_id,
+                self._tag_is_not_deleted(),
+            )
             .returning(TagModel)
         )
 
@@ -107,9 +126,17 @@ class TagRepository(SQLAlchemyRepository):
         return self._model_to_tag(result.scalar_one())
 
     async def delete_tag(self, user_id: UUID, tag_id: UUID) -> None:
-        stmt = delete(TagModel).where(TagModel.creator_id == user_id, TagModel.tag_id == tag_id)
+        stmt = delete(TagModel).where(
+            TagModel.creator_id == user_id,
+            TagModel.tag_id == tag_id,
+            self._tag_is_not_deleted(),
+        )
 
         await self.session.execute(stmt)
+
+    @staticmethod
+    def _tag_is_not_deleted():
+        return TagModel.deleted_at.is_(None)
 
     @staticmethod
     def _model_to_tag(model: TagModel) -> Tag:
