@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -208,6 +208,31 @@ async def test_schedule_availability_ignores_another_users_schedule(
     # Assert
     assert sut.can_add_task
     assert sut.blocking_tasks == []
+
+
+@pytest.mark.asyncio
+async def test_nearest_free_schedule_ignores_another_users_schedule(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    search_from = datetime(2099, 9, 3, 10, 0)
+    await create_task(
+        task_service,
+        user_id=TEST_OTHER_USER_ID,
+        title="foreign-nearest-free",
+        starts_at=search_from,
+        ends_at=search_from + timedelta(hours=1),
+    )
+
+    # Act
+    sut = await task_service.find_nearest_free_schedule(
+        TEST_USER_ID,
+        duration=timedelta(minutes=30),
+        search_from=search_from,
+    )
+
+    # Assert
+    assert sut == Schedule(starts_at=search_from, ends_at=search_from + timedelta(minutes=30))
 
 
 @pytest.mark.asyncio

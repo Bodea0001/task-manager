@@ -1,5 +1,6 @@
 from uuid import UUID
 from typing import Any
+from datetime import datetime, timedelta
 
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from domain.value_objects.audit import AuditEvent, AuditEntityType, AuditEventType
@@ -111,6 +112,29 @@ class TaskService:
             return ScheduleAvailability(
                 can_add_task=not blocking_tasks,
                 blocking_tasks=blocking_tasks,
+            )
+
+    async def find_nearest_free_schedule(
+        self,
+        user_id: UUID,
+        duration: timedelta,
+        excluded_windows: tuple[Schedule, ...] = (),
+        search_from: datetime | None = None,
+    ) -> Schedule:
+        if duration <= timedelta(0):
+            raise ValueError("duration must be positive")
+
+        if search_from is None:
+            search_from = datetime.now()
+
+        self._validate_schedule_windows(excluded_windows)
+
+        async with self.uow(read_only=True) as uow:
+            return await uow.task.find_nearest_free_schedule(
+                user_id=user_id,
+                duration=duration,
+                excluded_windows=excluded_windows,
+                search_from=search_from,
             )
 
     async def update_task(self, user_id: UUID, task_id: UUID, data: UpdateTaskData) -> Task:
@@ -234,3 +258,9 @@ class TaskService:
     def _changed_task_fields(data: UpdateTaskData) -> list[str]:
         fields = ("title", "description", "status", "priority", "due_at", "schedule")
         return [field for field in fields if getattr(data, field) is not None]
+
+    @staticmethod
+    def _validate_schedule_windows(windows: tuple[Schedule, ...]) -> None:
+        for window in windows:
+            if window.ends_at < window.starts_at:
+                raise ValueError("ends_at cannot be earlier than starts_at")

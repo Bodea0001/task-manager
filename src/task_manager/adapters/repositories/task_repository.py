@@ -1,14 +1,16 @@
 from uuid import UUID
 from typing import Sequence, Any, Concatenate, Final, ParamSpec, TypeVar, cast
+from datetime import datetime, timedelta
+from functools import wraps
 from dataclasses import asdict
 from collections.abc import Awaitable, Callable
-from functools import wraps
 
 import asyncpg
-from sqlalchemy import Row, func, select, insert, update, delete, text
+from sqlalchemy import Row, func, select, insert, update, delete, text, bindparam
 from sqlalchemy.orm import defer, selectinload
 from sqlalchemy.exc import IntegrityError, NoResultFound
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.types import TIMESTAMP
+from sqlalchemy.dialects.postgresql import ARRAY, insert as pg_insert
 
 import exceptions as app_exc
 from dto.tasks import ListTasksFilters, AddTask, UpdateTaskData
@@ -169,6 +171,77 @@ class TaskRepository(SQLAlchemyRepository):
 
         result = await self.session.execute(stmt)
         return self._task_list_rows_to_tasks(result.all())
+
+    async def find_nearest_free_schedule(
+        self,
+        user_id: UUID,
+        duration: timedelta,
+        excluded_windows: tuple[Schedule, ...],
+        search_from: datetime,
+    ) -> Schedule:
+        stmt = text("""
+            WITH excluded_window AS (
+                SELECT starts_at, ends_at
+                FROM unnest(
+                    CAST(:excluded_starts AS timestamp[]),
+                    CAST(:excluded_ends AS timestamp[])
+                ) AS excluded(starts_at, ends_at)
+            ),
+            busy AS (
+                SELECT scheduled_task.starts_at, scheduled_task.ends_at
+                FROM scheduled_task
+                JOIN task ON task.task_id = scheduled_task.task_id
+                WHERE
+                    task.creator_id = :user_id
+                    AND task.deleted_at IS NULL
+                    AND scheduled_task.ends_at > :search_from
+
+                UNION ALL
+
+                SELECT starts_at, ends_at
+                FROM excluded_window
+                WHERE ends_at > :search_from
+            ),
+            candidate AS (
+                SELECT :search_from AS starts_at
+
+                UNION
+
+                SELECT ends_at AS starts_at
+                FROM busy
+                WHERE ends_at >= :search_from
+            )
+            SELECT
+                candidate.starts_at,
+                candidate.starts_at + (:duration_seconds * INTERVAL '1 second') AS ends_at
+            FROM candidate
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM busy
+                WHERE
+                    busy.starts_at < candidate.starts_at + (
+                        :duration_seconds * INTERVAL '1 second'
+                    )
+                    AND busy.ends_at > candidate.starts_at
+            )
+            ORDER BY candidate.starts_at
+            LIMIT 1
+        """).bindparams(
+            bindparam("excluded_starts", type_=ARRAY(TIMESTAMP(timezone=False))),
+            bindparam("excluded_ends", type_=ARRAY(TIMESTAMP(timezone=False))),
+        )
+
+        result = await self.session.execute(
+            stmt,
+            {
+                "user_id": user_id,
+                "duration_seconds": duration.total_seconds(),
+                "excluded_starts": [window.starts_at for window in excluded_windows],
+                "excluded_ends": [window.ends_at for window in excluded_windows],
+                "search_from": search_from,
+            },
+        )
+        return self._row_to_schedule(result.one())
 
     @translate_repository_errors
     async def get_task(self, user_id: UUID, task_id: UUID) -> Task:
@@ -554,3 +627,7 @@ class TaskRepository(SQLAlchemyRepository):
     @staticmethod
     def _row_to_free_time(row: Row[Any]) -> FreeTime:
         return FreeTime(starts_at=row.starts_at, ends_at=row.ends_at)
+
+    @staticmethod
+    def _row_to_schedule(row: Row[Any]) -> Schedule:
+        return Schedule(starts_at=row.starts_at, ends_at=row.ends_at)

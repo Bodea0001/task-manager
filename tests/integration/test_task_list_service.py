@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -265,6 +265,118 @@ async def test_schedule_availability_ignores_unscheduled_tasks(task_service: Tas
     # Assert
     assert sut.can_add_task
     assert sut.blocking_tasks == []
+
+
+@pytest.mark.asyncio
+async def test_user_can_find_nearest_free_schedule(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    search_from = datetime(2099, 8, 8, 9, 0)
+    await create_task(
+        task_service,
+        title="nearest-free-busy",
+        starts_at=datetime(2099, 8, 8, 10, 0),
+        ends_at=datetime(2099, 8, 8, 11, 0),
+    )
+
+    # Act
+    sut = await task_service.find_nearest_free_schedule(
+        TEST_USER_ID,
+        duration=timedelta(minutes=30),
+        excluded_windows=(
+            Schedule(
+                starts_at=datetime(2099, 8, 8, 9, 0),
+                ends_at=datetime(2099, 8, 8, 10, 0),
+            ),
+        ),
+        search_from=search_from,
+    )
+
+    # Assert
+    assert sut == Schedule(
+        starts_at=datetime(2099, 8, 8, 11, 0),
+        ends_at=datetime(2099, 8, 8, 11, 30),
+    )
+
+
+@pytest.mark.asyncio
+async def test_nearest_free_schedule_uses_gap_before_next_busy_window(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    search_from = datetime(2099, 8, 9, 9, 0)
+    await create_task(
+        task_service,
+        title="nearest-free-next-busy",
+        starts_at=datetime(2099, 8, 9, 12, 0),
+        ends_at=datetime(2099, 8, 9, 13, 0),
+    )
+
+    # Act
+    sut = await task_service.find_nearest_free_schedule(
+        TEST_USER_ID,
+        duration=timedelta(minutes=45),
+        excluded_windows=(
+            Schedule(
+                starts_at=datetime(2099, 8, 9, 9, 0),
+                ends_at=datetime(2099, 8, 9, 10, 30),
+            ),
+        ),
+        search_from=search_from,
+    )
+
+    # Assert
+    assert sut == Schedule(
+        starts_at=datetime(2099, 8, 9, 10, 30),
+        ends_at=datetime(2099, 8, 9, 11, 15),
+    )
+
+
+@pytest.mark.asyncio
+async def test_nearest_free_schedule_skips_candidates_inside_overlapping_busy_windows(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    search_from = datetime(2099, 8, 10, 10, 0)
+    await create_task(
+        task_service,
+        title="nearest-free-overlap-busy",
+        starts_at=search_from,
+        ends_at=datetime(2099, 8, 10, 12, 0),
+    )
+
+    # Act
+    sut = await task_service.find_nearest_free_schedule(
+        TEST_USER_ID,
+        duration=timedelta(minutes=30),
+        excluded_windows=(
+            Schedule(
+                starts_at=datetime(2099, 8, 10, 11, 0),
+                ends_at=datetime(2099, 8, 10, 13, 0),
+            ),
+        ),
+        search_from=search_from,
+    )
+
+    # Assert
+    assert sut == Schedule(
+        starts_at=datetime(2099, 8, 10, 13, 0),
+        ends_at=datetime(2099, 8, 10, 13, 30),
+    )
+
+
+@pytest.mark.asyncio
+async def test_nearest_free_schedule_requires_positive_duration(
+    task_service: TaskService,
+) -> None:
+    # Act / Assert
+    with pytest.raises(ValueError, match="duration must be positive"):
+        await task_service.find_nearest_free_schedule(
+            TEST_USER_ID,
+            duration=timedelta(0),
+            search_from=datetime(2099, 8, 10, 9, 0),
+        )
 
 
 @pytest.mark.asyncio

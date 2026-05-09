@@ -637,6 +637,31 @@ async def test_deleted_task_does_not_block_schedule_availability(
 
 
 @pytest.mark.asyncio
+async def test_deleted_task_does_not_affect_nearest_free_schedule(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    starts_at = datetime(2099, 7, 4, 10, 0)
+    task = await create_task(
+        task_service,
+        title="delete-release-nearest-free",
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(hours=1),
+    )
+
+    # Act
+    await task_service.delete_task(TEST_USER_ID, task.task_id)
+    sut = await task_service.find_nearest_free_schedule(
+        TEST_USER_ID,
+        duration=timedelta(minutes=30),
+        search_from=starts_at,
+    )
+
+    # Assert
+    assert sut == Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(minutes=30))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "action",
     (
