@@ -8,7 +8,3 @@ class Tag:
     tag_id: UUID
     name: str
     created_at: datetime
-
-    @classmethod
-    def from_dict(cls, data: dict):
-        return cls(**data)

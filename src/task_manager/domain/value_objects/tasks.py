@@ -12,19 +12,26 @@ class TaskStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Task:
     task_id: UUID
     title: str
     status: TaskStatus
-    starts_at: datetime
-    ends_at: datetime
+    due_at: datetime
     created_at: datetime
     description: str | None = None
     completed_at: datetime | None = None
+    schedule: Schedule | None = None
     tags: list[Tag] = field(default_factory=list)
 
-    @classmethod
-    def from_dict(cls, data: dict):
-        data["status"] = TaskStatus(data["status"])
-        return cls(**data)
+
+@dataclass(frozen=True, slots=True)
+class Schedule:
+    starts_at: datetime
+    ends_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FreeTime:
+    starts_at: datetime
+    ends_at: datetime

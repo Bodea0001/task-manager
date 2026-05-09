@@ -5,7 +5,13 @@ class Wrongness(BaseAppException):
     pass
 
 
-class WrongTaskDeadline(Wrongness):
+class WrongTaskInterval(Wrongness):
     def __init__(self):
-        message = "Wrong task deadline"
+        message = "Wrong task interval"
+        super().__init__(message)
+
+
+class TaskScheduleOverlap(Wrongness):
+    def __init__(self):
+        message = "Task schedule overlaps another task"
         super().__init__(message)

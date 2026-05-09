@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from adapters.unitofwork import SQLAlchemyUnitOfWork
-from domain.value_objects.tasks import Task, TaskStatus
+from domain.value_objects.tasks import FreeTime, Schedule, Task, TaskStatus
 from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
 import exceptions as app_exc
 
@@ -57,6 +57,10 @@ class TaskService:
         async with self.uow(read_only=True) as uow:
             return await uow.task.get_overdue_tasks(limit, offset)
 
+    async def get_free_time(self, window: Schedule) -> list[FreeTime]:
+        async with self.uow(read_only=True) as uow:
+            return await uow.task.get_free_time(window)
+
     async def update_task(self, task_id: UUID, data: UpdateTaskData) -> Task:
         async with self.uow() as uow:
             await self._check_if_task_exists(uow, task_id)
@@ -84,6 +88,12 @@ class TaskService:
         async with self.uow() as uow:
             await self._check_if_task_exists(uow, task_id)
             await uow.task.delete_task(task_id)
+
+    async def delete_schedule_from_task(self, task_id: UUID) -> Task:
+        async with self.uow() as uow:
+            await self._check_if_task_exists(uow, task_id)
+            await uow.task.delete_schedule_from_task(task_id)
+            return await uow.task.get_task(task_id)
 
     async def add_tag_to_task(self, task_id: UUID, tag_id: UUID) -> Task:
         async with self.uow() as uow:

@@ -5,9 +5,8 @@ from uuid import UUID
 
 from sqlalchemy import Index, ForeignKey, CheckConstraint
 from sqlalchemy.orm import Mapped, relationship, mapped_column
-from sqlalchemy.types import String, Text, TIMESTAMP, Enum
+from sqlalchemy.types import String, Text, Uuid, TIMESTAMP, Enum
 from sqlalchemy.dialects.postgresql import TSVECTOR
-from sqlalchemy.sql.sqltypes import Uuid
 
 from models.base import Base
 from models.dependencies import created_at, uuidpk
@@ -30,12 +29,7 @@ class Task(Base):
         server_default=TaskStatus.ACTIVE,
         comment="Статус задачи",
     )
-    starts_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=False), comment="Дата/время начала задачи"
-    )
-    ends_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=False), comment="Дата/время окончания задачи"
-    )
+    due_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=False), comment="Дедлайн задачи")
     created_at: Mapped[created_at]
     completed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True),
@@ -49,11 +43,43 @@ class Task(Base):
         viewonly=True,
         order_by="Tag.name",
     )
+    schedule: Mapped["ScheduledTask | None"] = relationship(
+        "ScheduledTask",
+        back_populates="task",
+        uselist=False,
+        cascade="all, delete-orphan",
+        lazy="joined",
+    )
 
     __table_args__ = (
         CheckConstraint("length(title) > 0", "non_empty_title"),
         CheckConstraint("length(description) > 0", "non_empty_description"),
-        CheckConstraint("ends_at >= starts_at", "correct_deadline"),
+    )
+
+
+class ScheduledTask(Base):
+    __tablename__ = "scheduled_task"
+
+    task_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("task.task_id", ondelete="CASCADE"),
+        primary_key=True,
+        comment="Идентификатор задачи",
+    )
+    starts_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=False), comment="Дата/время начала задачи в расписании"
+    )
+    ends_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=False), comment="Дата/время окончания задачи в расписании"
+    )
+
+    task: Mapped[Task] = relationship("Task", back_populates="schedule")
+
+    __table_args__ = (
+        CheckConstraint(
+            "ends_at >= starts_at",
+            "correct_interval",
+        ),
     )
 
 
