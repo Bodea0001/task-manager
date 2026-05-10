@@ -169,10 +169,150 @@ async def test_user_can_view_free_time_for_empty_schedule(task_service: TaskServ
     )
 
     # Act
-    sut = await task_service.get_free_time(TEST_USER_ID, window)
+    sut = await task_service.get_free_time(TEST_USER_ID, [window])
 
     # Assert
     assert sut == [FreeTime(starts_at=window.starts_at, ends_at=window.ends_at)]
+
+
+@pytest.mark.asyncio
+async def test_user_can_view_free_time_for_multiple_windows(task_service: TaskService) -> None:
+    # Arrange
+    await create_task(
+        task_service,
+        title="free-time-multiple-first-busy",
+        starts_at=datetime(2099, 8, 1, 10, 0),
+        ends_at=datetime(2099, 8, 1, 11, 0),
+    )
+    await create_task(
+        task_service,
+        title="free-time-multiple-second-busy",
+        starts_at=datetime(2099, 8, 2, 14, 0),
+        ends_at=datetime(2099, 8, 2, 15, 0),
+    )
+
+    # Act
+    sut = await task_service.get_free_time(
+        TEST_USER_ID,
+        [
+            Schedule(
+                starts_at=datetime(2099, 8, 1, 9, 0),
+                ends_at=datetime(2099, 8, 1, 12, 0),
+            ),
+            Schedule(
+                starts_at=datetime(2099, 8, 2, 13, 0),
+                ends_at=datetime(2099, 8, 2, 16, 0),
+            ),
+        ],
+    )
+
+    # Assert
+    assert sut == [
+        FreeTime(
+            starts_at=datetime(2099, 8, 1, 9, 0),
+            ends_at=datetime(2099, 8, 1, 10, 0),
+        ),
+        FreeTime(
+            starts_at=datetime(2099, 8, 1, 11, 0),
+            ends_at=datetime(2099, 8, 1, 12, 0),
+        ),
+        FreeTime(
+            starts_at=datetime(2099, 8, 2, 13, 0),
+            ends_at=datetime(2099, 8, 2, 14, 0),
+        ),
+        FreeTime(
+            starts_at=datetime(2099, 8, 2, 15, 0),
+            ends_at=datetime(2099, 8, 2, 16, 0),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_can_view_free_time_from_schedule_iterable(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    window = Schedule(
+        starts_at=datetime(2099, 8, 6, 9, 0),
+        ends_at=datetime(2099, 8, 6, 18, 0),
+    )
+
+    # Act
+    sut = await task_service.get_free_time(TEST_USER_ID, (item for item in [window]))
+
+    # Assert
+    assert sut == [FreeTime(starts_at=window.starts_at, ends_at=window.ends_at)]
+
+
+@pytest.mark.asyncio
+async def test_free_time_validates_each_window_in_iterable(
+    task_service: TaskService,
+) -> None:
+    # Act / Assert
+    with pytest.raises(ValueError, match="ends_at cannot be earlier than starts_at"):
+        await task_service.get_free_time(
+            TEST_USER_ID,
+            [
+                Schedule(
+                    starts_at=datetime(2099, 8, 7, 9, 0),
+                    ends_at=datetime(2099, 8, 7, 18, 0),
+                ),
+                Schedule(
+                    starts_at=datetime(2099, 8, 8, 18, 0),
+                    ends_at=datetime(2099, 8, 8, 9, 0),
+                ),
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_free_time_handles_free_and_partially_busy_windows(
+    task_service: TaskService,
+) -> None:
+    # Arrange
+    await create_task(
+        task_service,
+        title="free-time-mixed-busy",
+        starts_at=datetime(2099, 8, 10, 11, 0),
+        ends_at=datetime(2099, 8, 10, 12, 0),
+    )
+
+    free_window = Schedule(
+        starts_at=datetime(2099, 8, 9, 9, 0),
+        ends_at=datetime(2099, 8, 9, 18, 0),
+    )
+    partially_busy_window = Schedule(
+        starts_at=datetime(2099, 8, 10, 9, 0),
+        ends_at=datetime(2099, 8, 10, 13, 0),
+    )
+
+    # Act
+    sut = await task_service.get_free_time(
+        TEST_USER_ID,
+        [free_window, partially_busy_window],
+    )
+
+    # Assert
+    assert sut == [
+        FreeTime(starts_at=free_window.starts_at, ends_at=free_window.ends_at),
+        FreeTime(
+            starts_at=datetime(2099, 8, 10, 9, 0),
+            ends_at=datetime(2099, 8, 10, 11, 0),
+        ),
+        FreeTime(
+            starts_at=datetime(2099, 8, 10, 12, 0),
+            ends_at=datetime(2099, 8, 10, 13, 0),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_free_time_requires_at_least_one_window(
+    task_service: TaskService,
+) -> None:
+    # Act / Assert
+    with pytest.raises(ValueError, match="at least one schedule window is required"):
+        await task_service.get_free_time(TEST_USER_ID, [])
 
 
 @pytest.mark.asyncio
@@ -400,10 +540,12 @@ async def test_user_can_view_sorted_free_time_between_scheduled_tasks(
     # Act
     sut = await task_service.get_free_time(
         TEST_USER_ID,
-        Schedule(
-            starts_at=datetime(2099, 8, 2, 9, 0),
-            ends_at=datetime(2099, 8, 2, 15, 0),
-        ),
+        [
+            Schedule(
+                starts_at=datetime(2099, 8, 2, 9, 0),
+                ends_at=datetime(2099, 8, 2, 15, 0),
+            )
+        ],
     )
 
     # Assert
@@ -444,10 +586,12 @@ async def test_free_time_view_clips_scheduled_tasks_to_window(
     # Act
     sut = await task_service.get_free_time(
         TEST_USER_ID,
-        Schedule(
-            starts_at=datetime(2099, 8, 3, 9, 0),
-            ends_at=datetime(2099, 8, 3, 18, 0),
-        ),
+        [
+            Schedule(
+                starts_at=datetime(2099, 8, 3, 9, 0),
+                ends_at=datetime(2099, 8, 3, 18, 0),
+            )
+        ],
     )
 
     # Assert
@@ -474,10 +618,12 @@ async def test_free_time_view_returns_empty_list_when_window_is_fully_busy(
     # Act
     sut = await task_service.get_free_time(
         TEST_USER_ID,
-        Schedule(
-            starts_at=datetime(2099, 8, 4, 9, 0),
-            ends_at=datetime(2099, 8, 4, 18, 0),
-        ),
+        [
+            Schedule(
+                starts_at=datetime(2099, 8, 4, 9, 0),
+                ends_at=datetime(2099, 8, 4, 18, 0),
+            )
+        ],
     )
 
     # Assert

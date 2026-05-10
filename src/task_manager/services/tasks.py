@@ -1,6 +1,7 @@
 from uuid import UUID
 from typing import Any
 from datetime import datetime, timedelta
+from collections.abc import Iterable
 
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from domain.value_objects.audit import AuditEvent, AuditEntityType, AuditEventType
@@ -98,9 +99,15 @@ class TaskService:
                 offset=offset,
             )
 
-    async def get_free_time(self, user_id: UUID, window: Schedule) -> list[FreeTime]:
+    async def get_free_time(
+        self,
+        user_id: UUID,
+        windows: Iterable[Schedule],
+    ) -> list[FreeTime]:
+        schedule_windows = self._prepare_schedule_windows(windows)
+
         async with self.uow(read_only=True) as uow:
-            return await uow.task.get_free_time(user_id, window)
+            return await uow.task.get_free_time(user_id, schedule_windows)
 
     async def check_schedule_availability(
         self,
@@ -264,3 +271,12 @@ class TaskService:
         for window in windows:
             if window.ends_at < window.starts_at:
                 raise ValueError("ends_at cannot be earlier than starts_at")
+
+    @classmethod
+    def _prepare_schedule_windows(cls, windows: Iterable[Schedule]) -> tuple[Schedule, ...]:
+        schedule_windows = tuple(windows)
+        if not schedule_windows:
+            raise ValueError("at least one schedule window is required")
+
+        cls._validate_schedule_windows(schedule_windows)
+        return schedule_windows

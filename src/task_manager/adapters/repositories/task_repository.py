@@ -101,58 +101,91 @@ class TaskRepository(SQLAlchemyRepository):
         result = await self.session.execute(stmt)
         return self._task_list_rows_to_tasks(result.all())
 
-    async def get_free_time(self, user_id: UUID, window: Schedule) -> list[FreeTime]:
+    async def get_free_time(self, user_id: UUID, windows: tuple[Schedule, ...]) -> list[FreeTime]:
         stmt = text("""
-            WITH busy AS (
+            WITH requested_window AS (
+                SELECT row_number() OVER () AS window_index, starts_at, ends_at
+                FROM unnest(
+                    CAST(:window_starts AS timestamp[]),
+                    CAST(:window_ends AS timestamp[])
+                ) AS requested(starts_at, ends_at)
+            ),
+            busy AS (
                 SELECT
-                    greatest(scheduled_task.starts_at, :starts_at) AS starts_at,
-                    least(scheduled_task.ends_at, :ends_at) AS ends_at
-                FROM scheduled_task
+                    requested_window.window_index,
+                    greatest(scheduled_task.starts_at, requested_window.starts_at) AS starts_at,
+                    least(scheduled_task.ends_at, requested_window.ends_at) AS ends_at
+                FROM requested_window
+                JOIN scheduled_task
+                    ON scheduled_task.starts_at < requested_window.ends_at
+                    AND scheduled_task.ends_at > requested_window.starts_at
                 JOIN task ON task.task_id = scheduled_task.task_id
                 WHERE
                     task.creator_id = :user_id
                     AND task.deleted_at IS NULL
-                    AND scheduled_task.starts_at < :ends_at
-                    AND scheduled_task.ends_at > :starts_at
             ),
             ordered_busy AS (
                 SELECT
+                    window_index,
                     starts_at,
                     ends_at,
-                    lead(starts_at) OVER (ORDER BY starts_at, ends_at) AS next_starts_at
+                    lead(starts_at) OVER (
+                        PARTITION BY window_index
+                        ORDER BY starts_at, ends_at
+                    ) AS next_starts_at
                 FROM busy
             ),
             gaps AS (
-                SELECT :starts_at AS starts_at, min(starts_at) AS ends_at
-                FROM busy
-                HAVING count(*) > 0
+                SELECT
+                    requested_window.window_index,
+                    requested_window.starts_at AS starts_at,
+                    min(busy.starts_at) AS ends_at
+                FROM requested_window
+                JOIN busy ON busy.window_index = requested_window.window_index
+                GROUP BY requested_window.window_index, requested_window.starts_at
 
                 UNION ALL
 
-                SELECT ends_at AS starts_at, next_starts_at AS ends_at
+                SELECT window_index, ends_at AS starts_at, next_starts_at AS ends_at
                 FROM ordered_busy
                 WHERE next_starts_at IS NOT NULL
 
                 UNION ALL
 
-                SELECT max(ends_at) AS starts_at, :ends_at AS ends_at
-                FROM busy
-                HAVING count(*) > 0
+                SELECT
+                    requested_window.window_index,
+                    max(busy.ends_at) AS starts_at,
+                    requested_window.ends_at AS ends_at
+                FROM requested_window
+                JOIN busy ON busy.window_index = requested_window.window_index
+                GROUP BY requested_window.window_index, requested_window.ends_at
 
                 UNION ALL
 
-                SELECT :starts_at AS starts_at, :ends_at AS ends_at
-                WHERE NOT EXISTS (SELECT 1 FROM busy)
+                SELECT window_index, starts_at, ends_at
+                FROM requested_window
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM busy
+                    WHERE busy.window_index = requested_window.window_index
+                )
             )
             SELECT starts_at, ends_at
             FROM gaps
             WHERE starts_at < ends_at
             ORDER BY starts_at, ends_at
-        """)
+        """).bindparams(
+            bindparam("window_starts", type_=ARRAY(TIMESTAMP(timezone=False))),
+            bindparam("window_ends", type_=ARRAY(TIMESTAMP(timezone=False))),
+        )
 
         result = await self.session.execute(
             stmt,
-            {"user_id": user_id, "starts_at": window.starts_at, "ends_at": window.ends_at},
+            {
+                "user_id": user_id,
+                "window_starts": [window.starts_at for window in windows],
+                "window_ends": [window.ends_at for window in windows],
+            },
         )
         return [self._row_to_free_time(row) for row in result.all()]
 

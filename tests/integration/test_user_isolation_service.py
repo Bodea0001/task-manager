@@ -179,7 +179,7 @@ async def test_user_free_time_ignores_another_users_schedule(task_service: TaskS
     )
 
     # Act
-    sut = await task_service.get_free_time(TEST_USER_ID, window)
+    sut = await task_service.get_free_time(TEST_USER_ID, [window])
 
     # Assert
     assert sut == [FreeTime(starts_at=window.starts_at, ends_at=window.ends_at)]
