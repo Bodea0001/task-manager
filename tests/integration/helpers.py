@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta
 from itertools import count
 from uuid import UUID
+from collections.abc import Iterable
 
 from constants import TEST_TAG_PREFIX, TEST_TITLE_PREFIX, TEST_USER_ID
 from domain.value_objects.tags import Tag
 from domain.value_objects.tasks import Schedule, Task, TaskPriority, TaskStatus
-from dto.tasks import AddTask
+from dto.tasks import AddTask, TaskList
 from services.tags import TagService
 from services.tasks import TaskService
 
@@ -61,11 +62,19 @@ async def create_tag(
     return await tag_service.create_tag(user_id, f"{TEST_TAG_PREFIX}{name}")
 
 
-def task_ids(tasks: list[Task]) -> set:
+def _task_items(tasks: Iterable[Task] | TaskList) -> Iterable[Task]:
+    if isinstance(tasks, TaskList):
+        return tasks.tasks
+    return tasks
+
+
+def task_ids(tasks: Iterable[Task] | TaskList) -> set:
+    tasks = _task_items(tasks)
     return {task.task_id for task in tasks}
 
 
-def task_ids_with_test_prefix(tasks: list[Task]) -> set:
+def task_ids_with_test_prefix(tasks: Iterable[Task] | TaskList) -> set:
+    tasks = _task_items(tasks)
     return {task.task_id for task in tasks if task.title.startswith(TEST_TITLE_PREFIX)}
 
 

@@ -22,6 +22,13 @@ TEST_DATABASE_NAME_PARTS = {"test", "testing", "pytest"}
 TEST_TABLES = (
     "audit_event",
     "user_refresh_token",
+    "task_recurrence_instance_override",
+    "task_recurrence_materialization_conflict",
+    "task_recurrence_instance",
+    "task_recurrence_month_rule",
+    "task_recurrence_weekday",
+    "task_recurrence_series",
+    "task_recurrence_template",
     "task_store",
     "task_tag",
     "scheduled_task",

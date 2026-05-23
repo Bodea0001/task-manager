@@ -3,8 +3,16 @@ from uuid import uuid4
 
 import pytest
 
-from domain.value_objects.tasks import Schedule, TaskPriority, TaskStatus
-from dto.tasks import AddTask, ListTasksFilters, UpdateTaskData
+from domain.value_objects.tasks import RecurrenceFrequency, Schedule, TaskPriority, TaskStatus
+from dto.tasks import (
+    AddTask,
+    AddTaskRecurrence,
+    AddTaskRecurrenceTemplate,
+    ListTasksFilters,
+    UpdateTaskRecurrence,
+    UpdateTaskData,
+    UpdateTaskOccurrence,
+)
 
 
 def test_new_task_has_active_status_by_default() -> None:
@@ -147,6 +155,118 @@ def test_empty_task_update_is_rejected() -> None:
     # Act, Assert
     with pytest.raises(ValueError):
         UpdateTaskData()
+
+
+def test_task_recurrence_accepts_schedule_and_frequency() -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act
+    recurrence = AddTaskRecurrence(
+        frequency=RecurrenceFrequency.WEEKLY,
+        schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+        interval=2,
+        occurrences_limit=5,
+    )
+
+    # Assert
+    assert recurrence.frequency == RecurrenceFrequency.WEEKLY
+    assert recurrence.interval == 2
+    assert recurrence.occurrences_limit == 5
+
+
+def test_task_recurrence_template_requires_rules() -> None:
+    with pytest.raises(ValueError):
+        AddTaskRecurrenceTemplate(title="Pay rent", rules=())
+
+
+def test_task_recurrence_template_accepts_rules() -> None:
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    recurrence = AddTaskRecurrence(
+        frequency=RecurrenceFrequency.MONTHLY,
+        schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+    )
+
+    template = AddTaskRecurrenceTemplate(title="Pay rent", rules=(recurrence,))
+
+    assert template.rules == (recurrence,)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"interval": 0},
+        {"occurrences_limit": 0},
+        {"repeat_until": datetime(2026, 5, 5, 9, 0)},
+        {
+            "repeat_until": datetime(2026, 5, 6, 10, 0),
+            "occurrences_limit": 5,
+        },
+    ],
+)
+def test_task_recurrence_with_invalid_rule_is_rejected(kwargs: dict) -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act, Assert
+    with pytest.raises(ValueError):
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.DAILY,
+            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {
+            "repeat_until": datetime(2026, 5, 6, 10, 0),
+            "occurrences_limit": 5,
+        },
+        {"repeat_until": datetime(2026, 5, 5, 9, 0)},
+        {"occurrences_limit": 0},
+    ],
+)
+def test_task_recurrence_update_with_invalid_rule_is_rejected(kwargs: dict) -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act, Assert
+    with pytest.raises(ValueError):
+        UpdateTaskRecurrence(
+            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"frequency": RecurrenceFrequency.DAILY},
+        {"interval": 2},
+    ],
+)
+def test_task_recurrence_update_cannot_change_frequency_or_interval(kwargs: dict) -> None:
+    # Arrange
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    ends_at = starts_at + timedelta(hours=1)
+
+    # Act, Assert
+    with pytest.raises(TypeError):
+        UpdateTaskRecurrence(
+            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+            **kwargs,
+        )
+
+
+def test_task_occurrence_update_requires_change() -> None:
+    # Act, Assert
+    with pytest.raises(ValueError):
+        UpdateTaskOccurrence()
 
 
 def test_task_update_accepts_priority() -> None:

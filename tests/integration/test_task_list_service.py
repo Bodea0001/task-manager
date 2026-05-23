@@ -55,7 +55,35 @@ async def test_user_can_view_tasks_with_default_filters(task_service: TaskServic
     sut = await task_service.get_tasks(TEST_USER_ID)
 
     # Assert
+    assert sut.conflicts == []
     assert task_ids_with_test_prefix(sut) == {first.task_id, second.task_id}
+
+
+@pytest.mark.asyncio
+async def test_get_tasks_returns_task_list_contract(task_service: TaskService) -> None:
+    # Arrange
+    task = await create_task(task_service, title="task-list-contract")
+
+    # Act
+    sut = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            due_from=task.due_at - timedelta(minutes=1),
+            due_to=task.due_at + timedelta(minutes=1),
+        ),
+    )
+    count = await task_service.count_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            due_from=task.due_at - timedelta(minutes=1),
+            due_to=task.due_at + timedelta(minutes=1),
+        ),
+    )
+
+    # Assert
+    assert [item.task_id for item in sut.tasks] == [task.task_id]
+    assert sut.conflicts == []
+    assert count == len(sut.tasks)
 
 
 @pytest.mark.asyncio
@@ -102,7 +130,7 @@ async def test_user_can_paginate_tasks_ordered_by_due_date(task_service: TaskSer
 
     # Assert
     assert task_ids_with_test_prefix(sut) == {second.task_id}
-    assert first.task_id not in {task.task_id for task in sut}
+    assert first.task_id not in {task.task_id for task in sut.tasks}
 
 
 @pytest.mark.asyncio

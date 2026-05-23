@@ -34,6 +34,12 @@ class AuthConfig(BaseModel):
     refresh_token_session_limit: int = 5
 
 
+class RecurrenceConfig(BaseModel):
+    daily_materialization_days: int = 90
+    weekly_materialization_days: int = 90
+    monthly_materialization_days: int = 365
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         case_sensitive=False,
@@ -43,6 +49,7 @@ class Settings(BaseSettings):
 
     db: DatabaseConfig
     auth: AuthConfig = AuthConfig()
+    recurrence: RecurrenceConfig = RecurrenceConfig()
 
 
 settings = Settings()  # type: ignore

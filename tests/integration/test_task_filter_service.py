@@ -291,7 +291,7 @@ async def test_multiple_tag_filter_does_not_duplicate_matching_tasks(
     count = await task_service.count_tasks(TEST_USER_ID, filters)
 
     # Assert
-    assert [task.task_id for task in tasks if task.task_id == matching.task_id] == [
+    assert [task.task_id for task in tasks.tasks if task.task_id == matching.task_id] == [
         matching.task_id
     ]
     assert task_ids_with_test_prefix(tasks) == {matching.task_id, other.task_id}

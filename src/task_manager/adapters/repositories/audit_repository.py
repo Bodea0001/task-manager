@@ -28,6 +28,17 @@ class AuditRepository(SQLAlchemyRepository):
 
         await self.session.execute(stmt)
 
+    async def add_events(
+        self,
+        events: list[dict[str, Any]],
+    ) -> None:
+        if not events:
+            return
+
+        stmt = insert(AuditEventModel).values(events)
+
+        await self.session.execute(stmt)
+
     async def get_events(
         self,
         *,

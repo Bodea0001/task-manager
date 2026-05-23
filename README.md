@@ -17,6 +17,10 @@ mark it as done, find related tasks, or organize tasks for later.
 - Shows which existing tasks would get in the way before adding work to a
   specific time window.
 - Finds the nearest open time when the user knows how long the work should take.
+- Supports recurring tasks for work that repeats on a daily, weekly, or monthly
+  cadence.
+- Lets users review recurring tasks.
+- Lets users adjust, stop, or remove recurring tasks when plans change.
 - Makes it easy to change plans when deadlines, priorities, or details move.
 - Connects related work with lightweight context, such as projects, people, or
   topics.
@@ -48,6 +52,19 @@ assistant should infer it from urgency, deadline, impact, and wording, and use
 The assistant should keep each user's tasks separate, avoid overlapping planned
 work for the same user, and explain when a requested schedule conflicts with an
 existing task.
+
+For repeated work, the assistant should use recurring tasks instead of creating
+many independent tasks one by one. Recurring tasks support daily, weekly, and
+monthly schedules, planned time windows, and optional end limits.
+
+When a user wants to change when a recurring task happens or when it ends, the
+assistant can update the recurring task. When a user wants to change how often
+it repeats, such as changing "daily" to "weekly" or "every week" to "every two
+weeks", the assistant should replace the recurring task with a new one that
+matches the requested cadence.
+
+When a user asks about recurring work, the assistant can list the user's
+recurring tasks and page through them when there are many of them.
 
 ## Example Prompts
 
@@ -103,6 +120,39 @@ Work with tags and context:
 - "Rename the errands tag to personal errands."
 - "Show the history of the finance tag."
 
+Create recurring work:
+
+- "Remind me to submit a timesheet every Friday from 16:00 to 16:15."
+- "Create a daily standup prep task at 09:00 for 15 minutes."
+- "Add a weekly task to review invoices every Monday from 10:00 to 11:00."
+- "Create a monthly task to pay rent on the first day of each month."
+- "Schedule a recurring workout every two days from 07:00 to 08:00."
+- "Create a weekly product metrics review with high priority."
+- "Add a monthly server maintenance task and stop after 6 occurrences."
+- "Remind me to water the office plants every Wednesday until September 30."
+
+Review recurring work:
+
+- "Show my recurring tasks."
+- "List all recurring tasks."
+- "Show the next 10 recurring tasks."
+- "Show the recurring tasks I created most recently."
+- "Show recurring tasks with their schedules."
+- "List monthly recurring tasks so I can review them."
+
+Update recurring work:
+
+- "Move the weekly invoice review to Mondays from 11:00 to 12:00."
+- "Stop the recurring standup prep task starting next Friday."
+- "End the rent reminder after the next 3 occurrences."
+- "Delete the old recurring weekly metrics task."
+- "Change the daily backup check to weekly instead."
+- "Skip tomorrow's standup prep."
+
+For requests like "Change the daily backup check to weekly instead", the
+assistant should replace the old daily recurring task with a new weekly one,
+because repeat frequency and interval are not edited in place.
+
 ## Project Status
 
 Implemented product areas:
@@ -110,6 +160,8 @@ Implemented product areas:
 - Tasks: creation, updates, deadlines, scheduling, priorities, status changes,
   removal, search, counts, free-time lookup across chosen periods, schedule
   availability checks, nearest open time lookup, and change history.
+- Recurring tasks: daily/weekly/monthly recurring work, schedule changes,
+  skipped dates, stopping, deletion, and paginated listing.
 - Tags and context: tag creation, renaming, removal, task tagging, contextual
   lookup, and change history.
 - Users and access: user accounts, authentication, and per-user data access.

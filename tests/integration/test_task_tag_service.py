@@ -75,7 +75,7 @@ async def test_user_can_view_tasks_with_tags(
 
     # Act
     tasks = await task_service.get_tasks(TEST_USER_ID, ListTasksFilters(limit=1000))
-    sut = {item.task_id: item for item in tasks if item.title.startswith(TEST_TITLE_PREFIX)}
+    sut = {item.task_id: item for item in tasks.tasks if item.title.startswith(TEST_TITLE_PREFIX)}
 
     # Assert
     assert set(sut) == {first_task.task_id, second_task.task_id}

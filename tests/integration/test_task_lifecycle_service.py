@@ -422,7 +422,7 @@ async def test_deleting_task_schedule_removes_it_from_schedule_filters(
     )
 
     # Assert
-    assert task.task_id not in {item.task_id for item in sut}
+    assert task.task_id not in {item.task_id for item in sut.tasks}
 
 
 @pytest.mark.asyncio
@@ -533,7 +533,7 @@ async def test_deleting_task_removes_it_from_schedule_filters(task_service: Task
     )
 
     # Assert
-    assert task.task_id not in {item.task_id for item in sut}
+    assert task.task_id not in {item.task_id for item in sut.tasks}
     with pytest.raises(TaskNotFound):
         await task_service.get_task(TEST_USER_ID, task.task_id)
 
@@ -552,7 +552,7 @@ async def test_deleted_task_is_excluded_from_task_list_and_count(
     count = await task_service.count_tasks(TEST_USER_ID)
 
     # Assert
-    listed_task_ids = {task.task_id for task in tasks}
+    listed_task_ids = {task.task_id for task in tasks.tasks}
     assert deleted_task.task_id not in listed_task_ids
     assert visible_task.task_id in listed_task_ids
     assert count == 1
