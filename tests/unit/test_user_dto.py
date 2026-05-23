@@ -1,5 +1,6 @@
 import pytest
 
+from domain.auth import PasswordHasher
 from dto.users import LoginUser, RegisterUser, UpdateUserData
 
 
@@ -18,6 +19,23 @@ def test_register_user_data_is_normalized() -> None:
     assert data.first_name == "First Name"
     assert data.last_name == "Last Name"
     assert data.middle_name == "Middle Name"
+    assert not hasattr(data, "password")
+    assert data.hashed_password
+
+
+def test_register_user_stores_hashed_password() -> None:
+    # Arrange
+    password_hasher = PasswordHasher()
+    data = RegisterUser(
+        email="user@example.com",
+        password="correct-password",
+        first_name="First",
+        last_name="Last",
+        password_hasher=password_hasher,
+    )
+
+    # Assert
+    assert password_hasher.verify_password("correct-password", data.hashed_password)
 
 
 @pytest.mark.parametrize(
@@ -79,6 +97,7 @@ def test_login_user_email_is_normalized() -> None:
 
     # Assert
     assert data.email == "user.name@example.com"
+    assert data.password == "correct-password"
 
 
 def test_user_update_data_is_normalized() -> None:

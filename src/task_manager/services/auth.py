@@ -38,10 +38,8 @@ class AuthService:
         )
 
     async def register(self, data: RegisterUser) -> AuthTokens:
-        hashed_password = self.password_hasher.hash_password(data.password)
-
         async with self.uow() as uow:
-            user = await uow.user.add_user(data, hashed_password)
+            user = await uow.user.add_user(data)
             return await self._issue_tokens(uow, user)
 
     async def login(self, data: LoginUser) -> AuthTokens:

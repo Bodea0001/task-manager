@@ -41,7 +41,7 @@ def translate_repository_errors(
 
 class UserRepository(SQLAlchemyRepository):
     @translate_repository_errors
-    async def add_user(self, data: RegisterUser, hashed_password: str) -> User:
+    async def add_user(self, data: RegisterUser) -> User:
         stmt = (
             insert(UserModel)
             .values(
@@ -58,7 +58,7 @@ class UserRepository(SQLAlchemyRepository):
         await self.session.execute(
             insert(UserAuthModel).values(
                 user_id=user_model.user_id,
-                hashed_password=hashed_password,
+                hashed_password=data.hashed_password,
             )
         )
         return self._model_to_user(user_model)
