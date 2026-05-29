@@ -1,4 +1,5 @@
 from uuid import UUID
+from typing import Literal
 from datetime import datetime, time, timedelta
 
 from sqlalchemy import (
@@ -12,7 +13,7 @@ from sqlalchemy import (
     literal,
     bindparam,
 )
-from sqlalchemy.types import Integer, TIMESTAMP
+from sqlalchemy.types import Uuid, Integer, TIMESTAMP
 from sqlalchemy.dialects.postgresql import ARRAY, insert as pg_insert
 
 import exceptions as app_exc
@@ -23,6 +24,7 @@ from dto.tasks import (
     UpdateTaskRecurrence,
     ListTaskRecurrenceTemplatesFilters,
 )
+from models.tags import Tag as TagModel
 from models.tasks import (
     Task as TaskModel,
     TaskRecurrenceSeries as TaskRecurrenceSeriesModel,
@@ -31,6 +33,7 @@ from models.tasks import (
     TaskRecurrenceInstance as TaskRecurrenceInstanceModel,
     TaskRecurrenceMonthRule as TaskRecurrenceMonthRuleModel,
 )
+from models.task_tags import TaskRecurrenceTemplateTag as TaskRecurrenceTemplateTagModel
 from domain.recurrences import recurrence_end_mode
 from domain.value_objects.tasks import (
     Schedule,
@@ -435,7 +438,20 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 RETURNING conflict_id
             ),
             inserted_tags AS (
-                SELECT NULL::uuid AS task_id WHERE false
+                INSERT INTO task_tag(task_id, tag_id)
+                SELECT
+                    task_values.task_id,
+                    task_recurrence_template_tag.tag_id
+                FROM task_values
+                JOIN inserted_task ON inserted_task.task_id = task_values.task_id
+                JOIN task_recurrence_template_tag
+                    ON task_recurrence_template_tag.template_id = task_values.template_id
+                JOIN tag
+                    ON tag.tag_id = task_recurrence_template_tag.tag_id
+                    AND tag.creator_id = :user_id
+                    AND tag.deleted_at IS NULL
+                ON CONFLICT (task_id, tag_id) DO NOTHING
+                RETURNING task_id
             )
             SELECT
                 (SELECT count(*) FROM inserted_instance) AS inserted_count,
@@ -465,6 +481,10 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         data: AddTaskRecurrenceTemplate,
     ) -> TaskRecurrenceTemplate:
         await self._raise_if_recurrence_schedules_overlap(user_id=user_id, rules=data.rules)
+        tag_ids = tuple(set(data.tag_ids))
+        if tag_ids:
+            await self._raise_if_tags_do_not_belong_to_user(user_id, set(tag_ids))
+
         stmt = text("""
             WITH rule_input AS MATERIALIZED (
                 SELECT
@@ -503,6 +523,20 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     description,
                     priority,
                     created_at
+            ),
+            tag_input AS MATERIALIZED (
+                SELECT DISTINCT tag_id
+                FROM unnest(CAST(:tag_ids AS uuid[])) AS tag_input(tag_id)
+            ),
+            inserted_template_tag AS (
+                INSERT INTO task_recurrence_template_tag(template_id, tag_id)
+                SELECT
+                    inserted_template.template_id,
+                    tag_input.tag_id
+                FROM inserted_template
+                CROSS JOIN tag_input
+                ON CONFLICT (template_id, tag_id) DO NOTHING
+                RETURNING template_id
             ),
             inserted_series AS (
                 INSERT INTO task_recurrence_series(
@@ -578,6 +612,9 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 inserted_template.description,
                 inserted_template.priority,
                 inserted_template.created_at,
+                NULL::uuid AS tag_id,
+                NULL::text AS tag_name,
+                NULL::timestamp with time zone AS tag_created_at,
                 inserted_series.series_id,
                 inserted_series.frequency,
                 inserted_series.step,
@@ -585,11 +622,12 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 inserted_series.default_time,
                 inserted_series.default_duration,
                 inserted_series.repeat_until,
-                inserted_series.max_occurrences
+                inserted_series.max_occurrences,
+                (SELECT count(*) FROM inserted_template_tag) AS inserted_tag_count
             FROM inserted_template
             JOIN inserted_series ON inserted_series.template_id = inserted_template.template_id
             ORDER BY inserted_series.anchor_date, inserted_series.default_time
-        """)
+        """).bindparams(bindparam("tag_ids", type_=ARRAY(Uuid())))
         result = await self.session.execute(
             stmt,
             {
@@ -598,6 +636,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 "description": data.description,
                 "priority": data.priority.value,
                 "rules": self._recurrence_rules_json(data.rules),
+                "tag_ids": list(tag_ids),
             },
         )
         rows = result.all()
@@ -606,7 +645,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             user_id,
             tuple(self._initial_materialization_window(rule) for rule in data.rules),
         )
-        return template
+        return await self.get_task_recurrence_template(user_id, template.template_id)
 
     async def get_task_recurrence_template(
         self,
@@ -663,6 +702,30 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             )
         )
         return result.scalar_one()
+
+    @translate_repository_errors
+    async def add_tag_to_task_recurrence_template(
+        self, user_id: UUID, template_id: UUID, tag_id: UUID
+    ) -> TaskRecurrenceTemplate:
+        await self._sync_recurrence_template_tag(
+            user_id=user_id,
+            template_id=template_id,
+            tag_id=tag_id,
+            action="add",
+        )
+        return await self.get_task_recurrence_template(user_id, template_id)
+
+    @translate_repository_errors
+    async def delete_tag_from_task_recurrence_template(
+        self, user_id: UUID, template_id: UUID, tag_id: UUID
+    ) -> TaskRecurrenceTemplate:
+        await self._sync_recurrence_template_tag(
+            user_id=user_id,
+            template_id=template_id,
+            tag_id=tag_id,
+            action="delete",
+        )
+        return await self.get_task_recurrence_template(user_id, template_id)
 
     @translate_repository_errors
     async def add_task_recurrence_rule(
@@ -1350,6 +1413,145 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             TaskRecurrenceTemplateModel.deleted_at.is_(None),
         )
 
+    async def _sync_recurrence_template_tag(
+        self,
+        *,
+        user_id: UUID,
+        template_id: UUID,
+        tag_id: UUID,
+        action: Literal["add", "delete"],
+    ) -> None:
+        if action == "add":
+            stmt = self._add_recurrence_template_tag_stmt()
+        elif action == "delete":
+            stmt = self._delete_recurrence_template_tag_stmt()
+        else:
+            raise ValueError("unsupported recurrence template tag action")
+
+        result = await self.session.execute(
+            stmt,
+            {"user_id": user_id, "template_id": template_id, "tag_id": tag_id},
+        )
+        row = result.one()
+        if not row.template_exists:
+            raise app_exc.TaskNotFound
+        if not row.tag_exists:
+            raise app_exc.TagNotFound
+
+    @staticmethod
+    def _add_recurrence_template_tag_stmt():
+        return text("""
+            WITH owner_template AS MATERIALIZED (
+                SELECT template_id
+                FROM task_recurrence_template
+                WHERE
+                    creator_id = :user_id
+                    AND template_id = :template_id
+                    AND deleted_at IS NULL
+            ),
+            owned_tag AS MATERIALIZED (
+                SELECT tag_id
+                FROM tag
+                WHERE
+                    creator_id = :user_id
+                    AND tag_id = :tag_id
+                    AND deleted_at IS NULL
+            ),
+            inserted_template_tag AS (
+                INSERT INTO task_recurrence_template_tag(template_id, tag_id)
+                SELECT owner_template.template_id, owned_tag.tag_id
+                FROM owner_template
+                CROSS JOIN owned_tag
+                ON CONFLICT (template_id, tag_id) DO NOTHING
+                RETURNING template_id
+            ),
+            current_active_instance_task AS MATERIALIZED (
+                SELECT task_recurrence_instance.task_id
+                FROM owner_template
+                JOIN task_recurrence_series
+                    ON task_recurrence_series.template_id = owner_template.template_id
+                JOIN task_recurrence_instance
+                    ON task_recurrence_instance.series_id = task_recurrence_series.series_id
+                JOIN task
+                    ON task.task_id = task_recurrence_instance.task_id
+                WHERE
+                    task_recurrence_series.deleted_at IS NULL
+                    AND task_recurrence_instance.deleted_at IS NULL
+                    AND task_recurrence_instance.planned_ends_at >= localtimestamp
+                    AND task.creator_id = :user_id
+                    AND task.deleted_at IS NULL
+                    AND task.status = 'active'
+            ),
+            inserted_task_tag AS (
+                INSERT INTO task_tag(task_id, tag_id)
+                SELECT current_active_instance_task.task_id, owned_tag.tag_id
+                FROM current_active_instance_task
+                CROSS JOIN owned_tag
+                ON CONFLICT (task_id, tag_id) DO NOTHING
+                RETURNING task_id
+            )
+            SELECT
+                EXISTS (SELECT 1 FROM owner_template) AS template_exists,
+                EXISTS (SELECT 1 FROM owned_tag) AS tag_exists
+        """)
+
+    @staticmethod
+    def _delete_recurrence_template_tag_stmt():
+        return text("""
+            WITH owner_template AS MATERIALIZED (
+                SELECT template_id
+                FROM task_recurrence_template
+                WHERE
+                    creator_id = :user_id
+                    AND template_id = :template_id
+                    AND deleted_at IS NULL
+            ),
+            owned_tag AS MATERIALIZED (
+                SELECT tag_id
+                FROM tag
+                WHERE
+                    creator_id = :user_id
+                    AND tag_id = :tag_id
+                    AND deleted_at IS NULL
+            ),
+            deleted_template_tag AS (
+                DELETE FROM task_recurrence_template_tag
+                USING owner_template, owned_tag
+                WHERE
+                    task_recurrence_template_tag.template_id = owner_template.template_id
+                    AND task_recurrence_template_tag.tag_id = owned_tag.tag_id
+                RETURNING task_recurrence_template_tag.template_id
+            ),
+            current_active_instance_task AS MATERIALIZED (
+                SELECT task_recurrence_instance.task_id
+                FROM owner_template
+                JOIN task_recurrence_series
+                    ON task_recurrence_series.template_id = owner_template.template_id
+                JOIN task_recurrence_instance
+                    ON task_recurrence_instance.series_id = task_recurrence_series.series_id
+                JOIN task
+                    ON task.task_id = task_recurrence_instance.task_id
+                WHERE
+                    task_recurrence_series.deleted_at IS NULL
+                    AND task_recurrence_instance.deleted_at IS NULL
+                    AND task_recurrence_instance.planned_ends_at >= localtimestamp
+                    AND task.creator_id = :user_id
+                    AND task.deleted_at IS NULL
+                    AND task.status = 'active'
+            ),
+            deleted_task_tag AS (
+                DELETE FROM task_tag
+                USING current_active_instance_task, owned_tag
+                WHERE
+                    task_tag.task_id = current_active_instance_task.task_id
+                    AND task_tag.tag_id = owned_tag.tag_id
+                RETURNING task_tag.task_id
+            )
+            SELECT
+                EXISTS (SELECT 1 FROM owner_template) AS template_exists,
+                EXISTS (SELECT 1 FROM owned_tag) AS tag_exists
+        """)
+
     @classmethod
     def _select_recurrence_template_rows(cls, template_page):
         return (
@@ -1359,6 +1561,9 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 TaskRecurrenceTemplateModel.description,
                 TaskRecurrenceTemplateModel.priority,
                 TaskRecurrenceTemplateModel.created_at,
+                TagModel.tag_id.label("tag_id"),
+                TagModel.name.label("tag_name"),
+                TagModel.created_at.label("tag_created_at"),
                 *cls._recurrence_returning_columns(),
             )
             .select_from(TaskRecurrenceTemplateModel)
@@ -1371,9 +1576,20 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 (TaskRecurrenceSeriesModel.template_id == TaskRecurrenceTemplateModel.template_id)
                 & (TaskRecurrenceSeriesModel.deleted_at.is_(None)),
             )
+            .outerjoin(
+                TaskRecurrenceTemplateTagModel,
+                TaskRecurrenceTemplateTagModel.template_id
+                == TaskRecurrenceTemplateModel.template_id,
+            )
+            .outerjoin(
+                TagModel,
+                (TagModel.tag_id == TaskRecurrenceTemplateTagModel.tag_id)
+                & (TagModel.deleted_at.is_(None)),
+            )
             .order_by(
                 TaskRecurrenceTemplateModel.created_at.desc(),
                 TaskRecurrenceTemplateModel.template_id.desc(),
+                TagModel.name,
                 TaskRecurrenceSeriesModel.anchor_date,
                 TaskRecurrenceSeriesModel.default_time,
             )

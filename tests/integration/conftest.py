@@ -28,6 +28,7 @@ TEST_TABLES = (
     "task_recurrence_month_rule",
     "task_recurrence_weekday",
     "task_recurrence_series",
+    "task_recurrence_template_tag",
     "task_recurrence_template",
     "task_store",
     "task_tag",

@@ -35,7 +35,10 @@ from models.tasks import (
     TaskRecurrenceInstance as TaskRecurrenceInstanceModel,
     TaskRecurrenceTemplate as TaskRecurrenceTemplateModel,
 )
-from models.task_tags import TaskTag as TaskTagModel
+from models.task_tags import (
+    TaskTag as TaskTagModel,
+    TaskRecurrenceTemplateTag as TaskRecurrenceTemplateTagModel,
+)
 from domain.recurrences import recurrence_end_mode
 from domain.value_objects.tags import Tag as DomainTag
 from domain.value_objects.tasks import (
@@ -326,6 +329,24 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
 
         if filters.priorities:
             conditions.append(TaskRecurrenceTemplateModel.priority.in_(filters.priorities))
+        if filters.tag_ids:
+            conditions.append(
+                select(1)
+                .select_from(TaskRecurrenceTemplateTagModel)
+                .where(
+                    TaskRecurrenceTemplateTagModel.template_id
+                    == TaskRecurrenceTemplateModel.template_id,
+                    TaskRecurrenceTemplateTagModel.tag_id.in_(filters.tag_ids),
+                    select(1)
+                    .select_from(TagModel)
+                    .where(
+                        TagModel.tag_id == TaskRecurrenceTemplateTagModel.tag_id,
+                        TaskRepositoryCommon._tag_is_not_deleted(),
+                    )
+                    .exists(),
+                )
+                .exists()
+            )
         if filters.frequencies:
             conditions.append(
                 select(1)
@@ -359,6 +380,25 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
 
             if SCHEDULED_TASK_TASK_ID_FKEY in str_error:
                 raise app_exc.TaskNotFound
+
+    async def _raise_if_tags_do_not_belong_to_user(
+        self,
+        user_id: UUID,
+        tag_ids: set[UUID],
+    ) -> None:
+        stmt = (
+            select(func.count())
+            .select_from(TagModel)
+            .where(
+                TagModel.creator_id == user_id,
+                TagModel.tag_id.in_(tag_ids),
+                self._tag_is_not_deleted(),
+            )
+        )
+
+        result = await self.session.execute(stmt)
+        if result.scalar_one() != len(tag_ids):
+            raise app_exc.TagNotFound
 
     @staticmethod
     def _task_list_rows_to_tasks(rows: Sequence[Row[tuple[TaskModel, Any]]]) -> list[Task]:
@@ -445,13 +485,19 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
     @classmethod
     def _rows_to_recurrence_template(cls, rows: Sequence[Row[Any]]) -> TaskRecurrenceTemplate:
         first_row = rows[0]
+        rules_by_id: dict[UUID, TaskRecurrence] = {}
+        for row in rows:
+            if row.series_id is not None and row.series_id not in rules_by_id:
+                rules_by_id[row.series_id] = cls._row_to_recurrence(row)
+
         return TaskRecurrenceTemplate(
             template_id=first_row.template_id,
             title=first_row.title,
             description=first_row.description,
             priority=TaskPriority(first_row.priority),
             created_at=first_row.created_at,
-            rules=tuple(cls._row_to_recurrence(row) for row in rows if row.series_id is not None),
+            tags=cls._recurrence_template_tags_from_rows(rows),
+            rules=tuple(rules_by_id.values()),
         )
 
     @classmethod
@@ -498,6 +544,19 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
             else None,
             occurrences_limit=row.max_occurrences,
         )
+
+    @staticmethod
+    def _recurrence_template_tags_from_rows(rows: Sequence[Row[Any]]) -> list[DomainTag]:
+        tags_by_id: dict[UUID, DomainTag] = {}
+        for row in rows:
+            tag_id = row.tag_id
+            if tag_id is not None and tag_id not in tags_by_id:
+                tags_by_id[tag_id] = DomainTag(
+                    tag_id=tag_id,
+                    name=row.tag_name,
+                    created_at=row.tag_created_at,
+                )
+        return list(tags_by_id.values())
 
     @staticmethod
     def _row_to_free_time(row: Row[Any]) -> FreeTime:

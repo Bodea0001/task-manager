@@ -139,6 +139,9 @@ class TaskRecurrenceTemplate(Base):
         back_populates="template",
         cascade="all, delete-orphan",
     )
+    tags: Mapped[list["Tag"]] = relationship(
+        "Tag", secondary="task_recurrence_template_tag", viewonly=True, order_by="Tag.name"
+    )
 
     __table_args__ = (
         CheckConstraint("length(title) > 0", "non_empty_title"),

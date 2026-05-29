@@ -247,6 +247,50 @@ class TaskService:
         async with self.uow(read_only=True) as uow:
             return await uow.task.count_task_recurrence_templates(user_id, filters)
 
+    async def get_task_recurrence_template_history(
+        self, user_id: UUID, template_id: UUID, limit: int = 100, offset: int = 0
+    ) -> list[AuditEvent]:
+        async with self.uow(read_only=True) as uow:
+            await uow.task.get_task_recurrence_template(user_id, template_id)
+            return await uow.audit.get_events(
+                entity_type=AuditEntityType.TASK,
+                entity_id=template_id,
+                limit=limit,
+                offset=offset,
+            )
+
+    async def add_tag_to_task_recurrence_template(
+        self, user_id: UUID, template_id: UUID, tag_id: UUID
+    ) -> TaskRecurrenceTemplate:
+        async with self.uow() as uow:
+            template = await uow.task.add_tag_to_task_recurrence_template(
+                user_id, template_id, tag_id
+            )
+            await self._record_task_event(
+                uow,
+                user_id=user_id,
+                task_id=template_id,
+                event_type=AuditEventType.TASK_RECURRENCE_TEMPLATE_TAG_ADDED,
+                data={"tag_id": str(tag_id)},
+            )
+            return template
+
+    async def delete_tag_from_task_recurrence_template(
+        self, user_id: UUID, template_id: UUID, tag_id: UUID
+    ) -> TaskRecurrenceTemplate:
+        async with self.uow() as uow:
+            template = await uow.task.delete_tag_from_task_recurrence_template(
+                user_id, template_id, tag_id
+            )
+            await self._record_task_event(
+                uow,
+                user_id=user_id,
+                task_id=template_id,
+                event_type=AuditEventType.TASK_RECURRENCE_TEMPLATE_TAG_REMOVED,
+                data={"tag_id": str(tag_id)},
+            )
+            return template
+
     async def add_task_recurrence_template(
         self, user_id: UUID, data: AddTaskRecurrenceTemplate
     ) -> TaskRecurrenceTemplate:

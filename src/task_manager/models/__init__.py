@@ -1,7 +1,7 @@
 from models.base import Base
 from models.audit import AuditEvent
 from models.tags import Tag
-from models.task_tags import TaskTag
+from models.task_tags import TaskRecurrenceTemplateTag, TaskTag
 from models.tasks import (
     ScheduledTask,
     Task,
@@ -21,6 +21,7 @@ __all__ = [
     "AuditEvent",
     "Tag",
     "ScheduledTask",
+    "TaskRecurrenceTemplateTag",
     "TaskTag",
     "TaskRecurrenceInstance",
     "TaskRecurrenceInstanceOverride",

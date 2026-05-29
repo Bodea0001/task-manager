@@ -8,6 +8,7 @@ from dto.tasks import (
     AddTask,
     AddTaskRecurrence,
     AddTaskRecurrenceTemplate,
+    ListTaskRecurrenceTemplatesFilters,
     ListTasksFilters,
     UpdateTaskRecurrence,
     UpdateTaskData,
@@ -191,6 +192,31 @@ def test_task_recurrence_template_accepts_rules() -> None:
     template = AddTaskRecurrenceTemplate(title="Pay rent", rules=(recurrence,))
 
     assert template.rules == (recurrence,)
+
+
+def test_task_recurrence_template_accepts_tag_ids() -> None:
+    starts_at = datetime(2026, 5, 5, 10, 0)
+    tag_id = uuid4()
+    recurrence = AddTaskRecurrence(
+        frequency=RecurrenceFrequency.MONTHLY,
+        schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+    )
+
+    template = AddTaskRecurrenceTemplate(
+        title="Pay rent",
+        rules=(recurrence,),
+        tag_ids=(tag_id,),
+    )
+
+    assert template.tag_ids == (tag_id,)
+
+
+def test_recurrence_template_filters_accept_tag_ids() -> None:
+    tag_id = uuid4()
+
+    filters = ListTaskRecurrenceTemplatesFilters(tag_ids=(tag_id,))
+
+    assert filters.tag_ids == (tag_id,)
 
 
 @pytest.mark.parametrize(

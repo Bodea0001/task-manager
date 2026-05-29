@@ -50,6 +50,7 @@ class TaskList:
 
 @dataclass(frozen=True, slots=True)
 class ListTaskRecurrenceTemplatesFilters:
+    tag_ids: tuple[UUID, ...] = ()
     priorities: tuple[TaskPriority, ...] = ()
     frequencies: tuple[RecurrenceFrequency, ...] = ()
     limit: int = 100
@@ -109,6 +110,7 @@ class AddTaskRecurrenceTemplate:
     title: str
     rules: tuple["AddTaskRecurrence", ...]
     description: str | None = None
+    tag_ids: tuple[UUID, ...] = ()
     priority: TaskPriority = TaskPriority.NORMAL
 
     def __post_init__(self) -> None:

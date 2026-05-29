@@ -26,3 +26,25 @@ class TaskTag(Base):
     created_at: Mapped[created_at]
 
     __table_args__ = (Index("ix_task_tag_tag_id_task_id", "tag_id", "task_id"),)
+
+
+class TaskRecurrenceTemplateTag(Base):
+    __tablename__ = "task_recurrence_template_tag"
+
+    template_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("task_recurrence_template.template_id"),
+        primary_key=True,
+        comment="Идентификатор шаблона повторяющейся задачи",
+    )
+    tag_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("tag.tag_id"),
+        primary_key=True,
+        comment="Идентификатор тега",
+    )
+    created_at: Mapped[created_at]
+
+    __table_args__ = (
+        Index("ix_task_recurrence_template_tag_tag_id_template_id", "tag_id", "template_id"),
+    )

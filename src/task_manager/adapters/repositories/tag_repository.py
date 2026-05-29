@@ -3,7 +3,7 @@ from typing import Concatenate, ParamSpec, TypeVar
 from collections.abc import Awaitable, Callable
 from functools import wraps
 
-from sqlalchemy import select, insert, update, delete
+from sqlalchemy import text, select, insert, update
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -150,13 +150,41 @@ class TagRepository(SQLAlchemyRepository):
         return self._model_to_tag(result.scalar_one())
 
     async def delete_tag(self, user_id: UUID, tag_id: UUID) -> None:
-        stmt = delete(TagModel).where(
-            TagModel.creator_id == user_id,
-            TagModel.tag_id == tag_id,
-            self._tag_is_not_deleted(),
-        )
+        stmt = text("""
+            WITH owned_tag AS MATERIALIZED (
+                SELECT tag_id
+                FROM tag
+                WHERE
+                    creator_id = :user_id
+                    AND tag_id = :tag_id
+                    AND deleted_at IS NULL
+            ),
+            deleted_task_tag AS (
+                DELETE FROM task_tag
+                USING owned_tag, task
+                WHERE
+                    task_tag.tag_id = owned_tag.tag_id
+                    AND task.task_id = task_tag.task_id
+                    AND task.creator_id = :user_id
+            ),
+            deleted_recurrence_template_tag AS (
+                DELETE FROM task_recurrence_template_tag
+                USING owned_tag, task_recurrence_template
+                WHERE
+                    task_recurrence_template_tag.tag_id = owned_tag.tag_id
+                    AND task_recurrence_template.template_id
+                        = task_recurrence_template_tag.template_id
+                    AND task_recurrence_template.creator_id = :user_id
+            ),
+            deleted_tag AS (
+                DELETE FROM tag
+                USING owned_tag
+                WHERE tag.tag_id = owned_tag.tag_id
+            )
+            SELECT EXISTS (SELECT 1 FROM owned_tag)
+        """)
 
-        await self.session.execute(stmt)
+        await self.session.execute(stmt, {"user_id": user_id, "tag_id": tag_id})
 
     @staticmethod
     def _tag_is_not_deleted():

@@ -1,16 +1,18 @@
 from datetime import datetime
 from datetime import timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from constants import TEST_OTHER_USER_ID, TEST_TITLE_PREFIX, TEST_USER_ID
+from domain.value_objects.audit import AuditEventType
 from domain.value_objects.tasks import (
     FreeTime,
     RecurrenceFrequency,
     Schedule,
+    Task,
     TaskKind,
     TaskPriority,
     TaskStatus,
@@ -25,7 +27,8 @@ from dto.tasks import (
     UpdateTaskData,
     UpdateTaskOccurrence,
 )
-from exceptions import TaskScheduleOverlap
+from exceptions import TagNotFound, TaskNotFound, TaskScheduleOverlap
+from helpers import create_tag, tag_ids
 from services.tasks import TaskService
 
 
@@ -51,6 +54,48 @@ async def max_generated_instance_date(test_engine: AsyncEngine, recurrence_id):
                 WHERE series_id = :recurrence_id
             """),
             {"recurrence_id": recurrence_id},
+        )
+        return result.scalar_one()
+
+
+async def recurrence_template_tag_link_count(
+    test_engine: AsyncEngine,
+    *,
+    template_id: UUID,
+    tag_id: UUID,
+) -> int:
+    async with test_engine.connect() as conn:
+        result = await conn.execute(
+            text("""
+                SELECT count(*)
+                FROM task_recurrence_template_tag
+                WHERE template_id = :template_id AND tag_id = :tag_id
+            """),
+            {"template_id": template_id, "tag_id": tag_id},
+        )
+        return result.scalar_one()
+
+
+async def recurrence_task_tag_link_count(
+    test_engine: AsyncEngine,
+    *,
+    template_id: UUID,
+    tag_id: UUID,
+) -> int:
+    async with test_engine.connect() as conn:
+        result = await conn.execute(
+            text("""
+                SELECT count(*)
+                FROM task_tag
+                JOIN task_recurrence_instance
+                    ON task_recurrence_instance.task_id = task_tag.task_id
+                JOIN task_recurrence_series
+                    ON task_recurrence_series.series_id = task_recurrence_instance.series_id
+                WHERE
+                    task_recurrence_series.template_id = :template_id
+                    AND task_tag.tag_id = :tag_id
+            """),
+            {"template_id": template_id, "tag_id": tag_id},
         )
         return result.scalar_one()
 
@@ -128,6 +173,7 @@ async def create_recurrence_template(
     title: str,
     frequency: RecurrenceFrequency = RecurrenceFrequency.DAILY,
     priority: TaskPriority = TaskPriority.NORMAL,
+    tag_ids: tuple[UUID, ...] = (),
     starts_at: datetime = datetime(2099, 12, 1, 9, 0),
     user_id=TEST_USER_ID,
 ):
@@ -136,6 +182,7 @@ async def create_recurrence_template(
         AddTaskRecurrenceTemplate(
             title=f"{TEST_TITLE_PREFIX}{title}",
             priority=priority,
+            tag_ids=tag_ids,
             rules=(
                 AddTaskRecurrence(
                     frequency=frequency,
@@ -196,6 +243,11 @@ async def create_materialization_conflict(
         ),
     )
     return recurrence, conflict_schedule, blocker
+
+
+def scheduled_start(task: Task) -> datetime:
+    assert task.schedule is not None
+    return task.schedule.starts_at
 
 
 @pytest.mark.asyncio
@@ -278,6 +330,39 @@ async def test_user_can_filter_recurrence_templates_by_frequency(
     )
 
     assert [template.template_id for template in templates] == [weekly.template_id]
+
+
+@pytest.mark.asyncio
+async def test_user_can_filter_recurrence_templates_by_tag(
+    task_service: TaskService,
+    tag_service,
+) -> None:
+    first_tag = await create_tag(tag_service, name="template-filter-first")
+    second_tag = await create_tag(tag_service, name="template-filter-second")
+    await create_recurrence_template(
+        task_service,
+        title="template-tag-filter-unmatched",
+        tag_ids=(second_tag.tag_id,),
+    )
+    tagged = await create_recurrence_template(
+        task_service,
+        title="template-tag-filter-matched",
+        tag_ids=(first_tag.tag_id, second_tag.tag_id),
+        starts_at=datetime(2099, 12, 2, 9, 0),
+    )
+
+    templates = await task_service.get_task_recurrence_templates(
+        TEST_USER_ID,
+        ListTaskRecurrenceTemplatesFilters(tag_ids=(first_tag.tag_id,), limit=1000),
+    )
+    count = await task_service.count_task_recurrence_templates(
+        TEST_USER_ID,
+        ListTaskRecurrenceTemplatesFilters(tag_ids=(first_tag.tag_id,)),
+    )
+
+    assert [template.template_id for template in templates] == [tagged.template_id]
+    assert tag_ids(templates[0].tags) == {first_tag.tag_id, second_tag.tag_id}
+    assert count == 1
 
 
 @pytest.mark.asyncio
@@ -452,6 +537,573 @@ async def test_user_can_add_recurrence_template_with_multiple_rules(
         Schedule(starts_at=datetime(2099, 9, 2, 8, 0), ends_at=datetime(2099, 9, 2, 8, 30)),
         Schedule(starts_at=datetime(2099, 9, 2, 20, 0), ends_at=datetime(2099, 9, 2, 20, 30)),
     ]
+
+
+@pytest.mark.asyncio
+async def test_recurrence_template_tags_are_copied_to_materialized_tasks(
+    task_service: TaskService,
+    tag_service,
+) -> None:
+    # Arrange
+    tag = await create_tag(tag_service, name="recurrence-template")
+    other_tag = await create_tag(tag_service, name="recurrence-template-other")
+    starts_at = datetime(2099, 9, 10, 10, 0)
+
+    # Act
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}recurring-tagged-template",
+            tag_ids=(tag.tag_id,),
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    occurrences_limit=2,
+                ),
+            ),
+        ),
+    )
+    fetched_template = await task_service.get_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+    )
+    tagged_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=starts_at,
+            ends_to=starts_at + timedelta(days=2),
+            tag_ids=(tag.tag_id,),
+        ),
+    )
+    other_tag_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=starts_at,
+            ends_to=starts_at + timedelta(days=2),
+            tag_ids=(other_tag.tag_id,),
+        ),
+    )
+
+    # Assert
+    assert tag_ids(template.tags) == {tag.tag_id}
+    assert tag_ids(fetched_template.tags) == {tag.tag_id}
+    assert len(tagged_tasks.tasks) == 2
+    assert all(tag_ids(task.tags) == {tag.tag_id} for task in tagged_tasks.tasks)
+    assert other_tag_tasks.tasks == []
+
+
+@pytest.mark.asyncio
+async def test_recurrence_template_tags_are_returned_in_template_list(
+    task_service: TaskService,
+    tag_service,
+) -> None:
+    # Arrange
+    first_tag = await create_tag(tag_service, name="recurrence-template-list-first")
+    second_tag = await create_tag(tag_service, name="recurrence-template-list-second")
+    starts_at = datetime(2099, 9, 20, 10, 0)
+
+    # Act
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}recurring-tagged-list-template",
+            tag_ids=(first_tag.tag_id, second_tag.tag_id, first_tag.tag_id),
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    occurrences_limit=1,
+                ),
+            ),
+        ),
+    )
+    templates = await task_service.get_task_recurrence_templates(
+        TEST_USER_ID,
+        ListTaskRecurrenceTemplatesFilters(limit=1000),
+    )
+
+    # Assert
+    tagged_template = next(item for item in templates if item.template_id == template.template_id)
+    assert tag_ids(tagged_template.tags) == {first_tag.tag_id, second_tag.tag_id}
+    assert len(tagged_template.rules) == 1
+
+
+@pytest.mark.asyncio
+async def test_recurrence_template_rejects_tag_from_another_user(
+    task_service: TaskService,
+    tag_service,
+) -> None:
+    # Arrange
+    other_tag = await create_tag(
+        tag_service,
+        user_id=TEST_OTHER_USER_ID,
+        name="recurrence-template-other-user",
+    )
+    starts_at = datetime(2099, 9, 25, 10, 0)
+
+    # Act, Assert
+    with pytest.raises(TagNotFound):
+        await task_service.add_task_recurrence_template(
+            TEST_USER_ID,
+            AddTaskRecurrenceTemplate(
+                title=f"{TEST_TITLE_PREFIX}recurring-invalid-tag-template",
+                tag_ids=(other_tag.tag_id,),
+                rules=(
+                    AddTaskRecurrence(
+                        frequency=RecurrenceFrequency.DAILY,
+                        schedule=Schedule(
+                            starts_at=starts_at,
+                            ends_at=starts_at + timedelta(hours=1),
+                        ),
+                        occurrences_limit=1,
+                    ),
+                ),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_user_can_add_tag_to_recurrence_template_and_current_active_instances(
+    task_service: TaskService,
+    tag_service,
+) -> None:
+    tag = await create_tag(tag_service, name="recurrence-template-add-later")
+    now = datetime.now().replace(microsecond=0)
+    starts_at = now - timedelta(days=1, hours=1)
+    title = f"{TEST_TITLE_PREFIX}recurring-add-tag-later"
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=title,
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=2)),
+                    occurrences_limit=4,
+                ),
+            ),
+        ),
+    )
+    tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=starts_at,
+            ends_to=starts_at + timedelta(days=4),
+            limit=1000,
+        ),
+    )
+    past, current, completed_future, active_future = sorted(tasks.tasks, key=scheduled_start)
+    await task_service.complete_task(TEST_USER_ID, completed_future.task_id)
+
+    updated_template = await task_service.add_tag_to_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+        tag.tag_id,
+    )
+    tagged_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=starts_at,
+            ends_to=starts_at + timedelta(days=4),
+            tag_ids=(tag.tag_id,),
+            limit=1000,
+        ),
+    )
+    past = await task_service.get_task(TEST_USER_ID, past.task_id)
+    completed_future = await task_service.get_task(TEST_USER_ID, completed_future.task_id)
+    history = await task_service.get_task_recurrence_template_history(
+        TEST_USER_ID, template.template_id
+    )
+
+    assert tag_ids(updated_template.tags) == {tag.tag_id}
+    assert {task.task_id for task in tagged_tasks.tasks} == {
+        current.task_id,
+        active_future.task_id,
+    }
+    assert tag_ids(past.tags) == set()
+    assert tag_ids(completed_future.tags) == set()
+    assert history[-1].event_type == AuditEventType.TASK_RECURRENCE_TEMPLATE_TAG_ADDED
+    assert history[-1].data == {"tag_id": str(tag.tag_id)}
+
+
+@pytest.mark.asyncio
+async def test_user_can_delete_tag_from_recurrence_template_and_current_active_instances(
+    task_service: TaskService,
+    tag_service,
+) -> None:
+    tag = await create_tag(tag_service, name="recurrence-template-remove-later")
+    now = datetime.now().replace(microsecond=0)
+    starts_at = now - timedelta(days=1, hours=1)
+    title = f"{TEST_TITLE_PREFIX}recurring-remove-tag-later"
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=title,
+            tag_ids=(tag.tag_id,),
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=2)),
+                    occurrences_limit=4,
+                ),
+            ),
+        ),
+    )
+    tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=starts_at,
+            ends_to=starts_at + timedelta(days=4),
+            limit=1000,
+        ),
+    )
+    past, current, completed_future, active_future = sorted(tasks.tasks, key=scheduled_start)
+    await task_service.complete_task(TEST_USER_ID, completed_future.task_id)
+
+    updated_template = await task_service.delete_tag_from_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+        tag.tag_id,
+    )
+    tagged_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=starts_at,
+            ends_to=starts_at + timedelta(days=4),
+            tag_ids=(tag.tag_id,),
+            limit=1000,
+        ),
+    )
+    current = await task_service.get_task(TEST_USER_ID, current.task_id)
+    completed_future = await task_service.get_task(TEST_USER_ID, completed_future.task_id)
+    active_future = await task_service.get_task(TEST_USER_ID, active_future.task_id)
+    history = await task_service.get_task_recurrence_template_history(
+        TEST_USER_ID, template.template_id
+    )
+
+    assert tag_ids(updated_template.tags) == set()
+    assert {task.task_id for task in tagged_tasks.tasks} == {
+        past.task_id,
+        completed_future.task_id,
+    }
+    assert tag_ids(current.tags) == set()
+    assert tag_ids(completed_future.tags) == {tag.tag_id}
+    assert tag_ids(active_future.tags) == set()
+    assert history[-1].event_type == AuditEventType.TASK_RECURRENCE_TEMPLATE_TAG_REMOVED
+    assert history[-1].data == {"tag_id": str(tag.tag_id)}
+
+
+@pytest.mark.asyncio
+async def test_adding_tag_to_recurrence_template_is_idempotent(
+    task_service: TaskService,
+    tag_service,
+    test_engine: AsyncEngine,
+) -> None:
+    tag = await create_tag(tag_service, name="recurrence-template-add-idempotent")
+    starts_at = datetime(2099, 11, 1, 10, 0)
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}recurring-add-tag-idempotent",
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    occurrences_limit=2,
+                ),
+            ),
+        ),
+    )
+
+    first = await task_service.add_tag_to_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+        tag.tag_id,
+    )
+    second = await task_service.add_tag_to_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+        tag.tag_id,
+    )
+
+    assert tag_ids(first.tags) == {tag.tag_id}
+    assert tag_ids(second.tags) == {tag.tag_id}
+    assert (
+        await recurrence_template_tag_link_count(
+            test_engine,
+            template_id=template.template_id,
+            tag_id=tag.tag_id,
+        )
+        == 1
+    )
+    assert (
+        await recurrence_task_tag_link_count(
+            test_engine,
+            template_id=template.template_id,
+            tag_id=tag.tag_id,
+        )
+        == 2
+    )
+
+
+@pytest.mark.asyncio
+async def test_deleting_tag_from_recurrence_template_is_idempotent(
+    task_service: TaskService,
+    tag_service,
+    test_engine: AsyncEngine,
+) -> None:
+    tag = await create_tag(tag_service, name="recurrence-template-delete-idempotent")
+    starts_at = datetime(2099, 11, 5, 10, 0)
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}recurring-delete-tag-idempotent",
+            tag_ids=(tag.tag_id,),
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    occurrences_limit=2,
+                ),
+            ),
+        ),
+    )
+
+    first = await task_service.delete_tag_from_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+        tag.tag_id,
+    )
+    second = await task_service.delete_tag_from_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+        tag.tag_id,
+    )
+
+    assert tag_ids(first.tags) == set()
+    assert tag_ids(second.tags) == set()
+    assert (
+        await recurrence_template_tag_link_count(
+            test_engine,
+            template_id=template.template_id,
+            tag_id=tag.tag_id,
+        )
+        == 0
+    )
+    assert (
+        await recurrence_task_tag_link_count(
+            test_engine,
+            template_id=template.template_id,
+            tag_id=tag.tag_id,
+        )
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+async def test_future_recurrence_materialization_uses_added_template_tag(
+    task_service: TaskService,
+    tag_service,
+) -> None:
+    tag = await create_tag(tag_service, name="recurrence-template-future-added")
+    starts_at = datetime(2099, 1, 1, 10, 0)
+    future_window = Schedule(
+        starts_at=starts_at + timedelta(days=95),
+        ends_at=starts_at + timedelta(days=97),
+    )
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}recurring-future-added-tag",
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    occurrences_limit=100,
+                ),
+            ),
+        ),
+    )
+    await task_service.add_tag_to_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+        tag.tag_id,
+    )
+
+    await task_service.materialize_recurrence_instances(TEST_USER_ID, (future_window,))
+    tagged_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=future_window.starts_at,
+            ends_to=future_window.ends_at,
+            tag_ids=(tag.tag_id,),
+            limit=1000,
+        ),
+    )
+
+    assert len(tagged_tasks.tasks) == 2
+    assert all(tag_ids(task.tags) == {tag.tag_id} for task in tagged_tasks.tasks)
+
+
+@pytest.mark.asyncio
+async def test_future_recurrence_materialization_uses_removed_template_tag(
+    task_service: TaskService,
+    tag_service,
+) -> None:
+    tag = await create_tag(tag_service, name="recurrence-template-future-removed")
+    starts_at = datetime(2099, 1, 10, 10, 0)
+    future_window = Schedule(
+        starts_at=starts_at + timedelta(days=95),
+        ends_at=starts_at + timedelta(days=97),
+    )
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}recurring-future-removed-tag",
+            tag_ids=(tag.tag_id,),
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    occurrences_limit=100,
+                ),
+            ),
+        ),
+    )
+    await task_service.delete_tag_from_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+        tag.tag_id,
+    )
+
+    await task_service.materialize_recurrence_instances(TEST_USER_ID, (future_window,))
+    future_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=future_window.starts_at,
+            ends_to=future_window.ends_at,
+            limit=1000,
+        ),
+    )
+    tagged_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=future_window.starts_at,
+            ends_to=future_window.ends_at,
+            tag_ids=(tag.tag_id,),
+            limit=1000,
+        ),
+    )
+
+    assert len(future_tasks.tasks) == 2
+    assert all(tag_ids(task.tags) == set() for task in future_tasks.tasks)
+    assert tagged_tasks.tasks == []
+
+
+@pytest.mark.asyncio
+async def test_future_recurrence_materialization_ignores_soft_deleted_template_tag(
+    task_service: TaskService,
+    tag_service,
+    test_engine: AsyncEngine,
+) -> None:
+    tag = await create_tag(tag_service, name="recurrence-template-soft-deleted")
+    starts_at = datetime(2099, 1, 20, 10, 0)
+    future_window = Schedule(
+        starts_at=starts_at + timedelta(days=95),
+        ends_at=starts_at + timedelta(days=97),
+    )
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}recurring-soft-deleted-tag",
+            tag_ids=(tag.tag_id,),
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    occurrences_limit=100,
+                ),
+            ),
+        ),
+    )
+    async with test_engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE tag SET deleted_at = now() WHERE tag_id = :tag_id"),
+            {"tag_id": tag.tag_id},
+        )
+
+    await task_service.materialize_recurrence_instances(TEST_USER_ID, (future_window,))
+    future_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            starts_from=future_window.starts_at,
+            ends_to=future_window.ends_at,
+            limit=1000,
+        ),
+    )
+
+    assert (
+        await recurrence_template_tag_link_count(
+            test_engine,
+            template_id=template.template_id,
+            tag_id=tag.tag_id,
+        )
+        == 1
+    )
+    assert len(future_tasks.tasks) == 2
+    assert all(tag_ids(task.tags) == set() for task in future_tasks.tasks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    (
+        "add_tag_to_task_recurrence_template",
+        "delete_tag_from_task_recurrence_template",
+    ),
+)
+async def test_user_cannot_change_tags_on_another_users_recurrence_template(
+    task_service: TaskService,
+    tag_service,
+    action: str,
+) -> None:
+    tag = await create_tag(tag_service, name=f"{action}-own-tag")
+    other_template = await create_recurrence_template(
+        task_service,
+        user_id=TEST_OTHER_USER_ID,
+        title=f"{action}-other-template",
+    )
+
+    with pytest.raises(TaskNotFound):
+        await getattr(task_service, action)(TEST_USER_ID, other_template.template_id, tag.tag_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    (
+        "add_tag_to_task_recurrence_template",
+        "delete_tag_from_task_recurrence_template",
+    ),
+)
+async def test_user_cannot_use_another_users_tag_for_recurrence_template(
+    task_service: TaskService,
+    tag_service,
+    action: str,
+) -> None:
+    template = await create_recurrence_template(
+        task_service,
+        title=f"{action}-own-template",
+    )
+    other_tag = await create_tag(
+        tag_service,
+        user_id=TEST_OTHER_USER_ID,
+        name=f"{action}-other-tag",
+    )
+
+    with pytest.raises(TagNotFound):
+        await getattr(task_service, action)(TEST_USER_ID, template.template_id, other_tag.tag_id)
 
 
 @pytest.mark.asyncio

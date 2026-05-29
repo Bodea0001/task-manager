@@ -64,7 +64,8 @@ weeks", the assistant should replace the recurring task with a new one that
 matches the requested cadence.
 
 When a user asks about recurring work, the assistant can list the user's
-recurring tasks and page through them when there are many of them.
+recurring tasks and page through them when there are many of them. It can also
+narrow the list by context when the user mentions a project, topic, or area.
 
 ## Example Prompts
 
@@ -139,6 +140,8 @@ Review recurring work:
 - "Show the recurring tasks I created most recently."
 - "Show recurring tasks with their schedules."
 - "List monthly recurring tasks so I can review them."
+- "Show recurring tasks related to finance."
+- "List weekly recurring tasks for the hiring project."
 
 Update recurring work:
 
@@ -148,6 +151,8 @@ Update recurring work:
 - "Delete the old recurring weekly metrics task."
 - "Change the daily backup check to weekly instead."
 - "Skip tomorrow's standup prep."
+- "Mark the weekly invoice review as finance-related."
+- "Remove the hiring context from the recurring interview prep task."
 
 For requests like "Change the daily backup check to weekly instead", the
 assistant should replace the old daily recurring task with a new weekly one,

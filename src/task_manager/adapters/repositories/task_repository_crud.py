@@ -3,7 +3,6 @@ from uuid import UUID
 from sqlalchemy import delete, false, func, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-import exceptions as app_exc
 from dto.tasks import AddTask, ListTasksFilters, TaskList, UpdateTaskData
 from models.tags import Tag as TagModel
 from models.tasks import (
@@ -186,25 +185,6 @@ class TaskCrudMixin(TaskScheduleMixin):
         )
 
         await self.session.execute(stmt)
-
-    async def _raise_if_tags_do_not_belong_to_user(
-        self,
-        user_id: UUID,
-        tag_ids: set[UUID],
-    ) -> None:
-        stmt = (
-            select(func.count())
-            .select_from(TagModel)
-            .where(
-                TagModel.creator_id == user_id,
-                TagModel.tag_id.in_(tag_ids),
-                self._tag_is_not_deleted(),
-            )
-        )
-
-        result = await self.session.execute(stmt)
-        if result.scalar_one() != len(tag_ids):
-            raise app_exc.TagNotFound
 
     async def _get_recurrence_conflicts_as_tasks(
         self, user_id: UUID, filters: ListTasksFilters

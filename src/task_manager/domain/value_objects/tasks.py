@@ -102,6 +102,7 @@ class TaskRecurrenceTemplate:
     priority: TaskPriority
     created_at: datetime
     description: str | None = None
+    tags: list[Tag] = field(default_factory=list)
     rules: tuple["TaskRecurrence", ...] = ()
 
 
