@@ -665,7 +665,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         result = await self.session.execute(stmt)
         rows = result.all()
         if not rows:
-            raise app_exc.TaskNotFound
+            raise app_exc.RecurrenceTemplateNotFound
         return self._rows_to_recurrence_template(rows)
 
     async def get_task_recurrence_templates(
@@ -703,7 +703,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
         return result.scalar_one()
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceTemplateNotFound)
     async def add_tag_to_task_recurrence_template(
         self, user_id: UUID, template_id: UUID, tag_id: UUID
     ) -> TaskRecurrenceTemplate:
@@ -715,7 +715,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
         return await self.get_task_recurrence_template(user_id, template_id)
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceTemplateNotFound)
     async def delete_tag_from_task_recurrence_template(
         self, user_id: UUID, template_id: UUID, tag_id: UUID
     ) -> TaskRecurrenceTemplate:
@@ -727,10 +727,11 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
         return await self.get_task_recurrence_template(user_id, template_id)
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceTemplateNotFound)
     async def add_task_recurrence_rule(
         self, user_id: UUID, template_id: UUID, data: AddTaskRecurrence
     ) -> TaskRecurrence:
+        await self._raise_if_recurrence_template_does_not_belong_to_user(user_id, template_id)
         await self._raise_if_recurrence_schedule_overlaps(
             user_id=user_id, task_id=None, recurrence_id=None, data=data
         )
@@ -756,6 +757,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
     async def get_task_recurrence_rules(
         self, user_id: UUID, template_id: UUID
     ) -> list[TaskRecurrence]:
+        await self._raise_if_recurrence_template_does_not_belong_to_user(user_id, template_id)
         stmt = (
             select(TaskRecurrenceSeriesModel)
             .join(
@@ -773,11 +775,11 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         result = await self.session.execute(stmt)
         return [self._model_to_recurrence(model) for model in result.scalars()]
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def get_recurrence(self, user_id: UUID, recurrence_id: UUID) -> TaskRecurrence:
         return await self._get_recurrence(user_id, recurrence_id)
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def get_recurrence_template_id(self, user_id: UUID, recurrence_id: UUID) -> UUID:
         stmt = (
             select(TaskRecurrenceSeriesModel.template_id)
@@ -846,7 +848,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         result = await self.session.execute(stmt)
         return tuple(result.scalars())
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def update_task_recurrence(
         self, user_id: UUID, recurrence_id: UUID, data: UpdateTaskRecurrence
     ) -> TaskRecurrence:
@@ -888,7 +890,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
         return recurrence
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def stop_task_recurrence(
         self, user_id: UUID, recurrence_id: UUID, stop_from: datetime
     ) -> TaskRecurrence:
@@ -909,10 +911,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             )
             .returning(*self._recurrence_returning_columns())
         )
-        row = result.one_or_none()
-        if row is None:
-            raise app_exc.TaskNotFound
-
+        row = result.one()
         await self._set_recurrence_tasks_status_from(
             user_id=user_id,
             recurrence_id=recurrence_id,
@@ -921,7 +920,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
         return self._row_to_recurrence(row)
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def delete_task_recurrence(self, user_id: UUID, recurrence_id: UUID) -> None:
         now = func.now()
         owner_series = self._owned_recurrence_series(user_id, recurrence_id).cte("owner_series")
@@ -966,9 +965,9 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             .add_cte(deleted_instances)
         )
         if not result.scalar_one():
-            raise app_exc.TaskNotFound
+            raise app_exc.RecurrenceRuleNotFound
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def recalculate_future_recurrence_instances(
         self,
         user_id: UUID,
@@ -1387,7 +1386,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         stmt = select(self._owned_recurrence_series(user_id, recurrence_id).exists())
         result = await self.session.execute(stmt)
         if not result.scalar_one():
-            raise app_exc.TaskNotFound
+            raise app_exc.RecurrenceRuleNotFound
 
     @staticmethod
     def _owned_recurrence_series(user_id: UUID, recurrence_id: UUID):
@@ -1434,7 +1433,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
         row = result.one()
         if not row.template_exists:
-            raise app_exc.TaskNotFound
+            raise app_exc.RecurrenceTemplateNotFound
         if not row.tag_exists:
             raise app_exc.TagNotFound
 
@@ -1719,4 +1718,4 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
         result = await self.session.execute(stmt)
         if not result.scalar_one():
-            raise app_exc.TaskNotFound
+            raise app_exc.RecurrenceTemplateNotFound

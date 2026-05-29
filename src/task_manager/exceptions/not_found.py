@@ -11,6 +11,24 @@ class TaskNotFound(NotFound):
         super().__init__(message)
 
 
+class RecurrenceTemplateNotFound(NotFound):
+    def __init__(self):
+        message = "Recurrence template not found"
+        super().__init__(message)
+
+
+class RecurrenceRuleNotFound(NotFound):
+    def __init__(self):
+        message = "Recurrence rule not found"
+        super().__init__(message)
+
+
+class RecurrenceOccurrenceNotFound(NotFound):
+    def __init__(self):
+        message = "Recurrence occurrence not found"
+        super().__init__(message)
+
+
 class TagNotFound(NotFound):
     def __init__(self):
         message = "Tag not found"

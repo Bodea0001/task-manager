@@ -1,18 +1,13 @@
 import json
 from uuid import UUID
-from typing import Sequence, Any, Concatenate, Final, ParamSpec, TypeVar, cast
+from typing import Sequence, Any, Concatenate, Final, ParamSpec, TypeVar, cast, overload
 from datetime import datetime, time, timedelta
 from functools import wraps
 from dataclasses import asdict
 from collections.abc import Awaitable, Callable
 
 import asyncpg
-from sqlalchemy import (
-    Row,
-    func,
-    select,
-    update,
-)
+from sqlalchemy import Row, func, select, update
 from sqlalchemy.orm import defer, selectinload
 from sqlalchemy.exc import IntegrityError, NoResultFound
 
@@ -65,20 +60,53 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+@overload
 def translate_repository_errors(
     method: Callable[Concatenate[Any, P], Awaitable[R]],
-) -> Callable[Concatenate[Any, P], Awaitable[R]]:
-    @wraps(method)
-    async def wrapper(self: Any, /, *args: P.args, **kwargs: P.kwargs) -> R:
-        try:
-            return await method(self, *args, **kwargs)
-        except NoResultFound:
-            raise app_exc.TaskNotFound
-        except IntegrityError as e:
-            self._raise_app_error_for_integrity_error(e)
-            raise e
+) -> Callable[Concatenate[Any, P], Awaitable[R]]: ...
 
-    return wrapper
+
+@overload
+def translate_repository_errors(
+    *,
+    not_found: type[BaseException] = app_exc.TaskNotFound,
+) -> Callable[
+    [Callable[Concatenate[Any, P], Awaitable[R]]],
+    Callable[Concatenate[Any, P], Awaitable[R]],
+]: ...
+
+
+def translate_repository_errors(
+    method: Callable[Concatenate[Any, P], Awaitable[R]] | None = None,
+    *,
+    not_found: type[BaseException] = app_exc.TaskNotFound,
+) -> (
+    Callable[Concatenate[Any, P], Awaitable[R]]
+    | Callable[
+        [Callable[Concatenate[Any, P], Awaitable[R]]],
+        Callable[Concatenate[Any, P], Awaitable[R]],
+    ]
+):
+    def decorator(
+        wrapped_method: Callable[Concatenate[Any, P], Awaitable[R]],
+        /,
+    ) -> Callable[Concatenate[Any, P], Awaitable[R]]:
+        @wraps(wrapped_method)
+        async def wrapper(self: Any, /, *args: P.args, **kwargs: P.kwargs) -> R:
+            try:
+                return await wrapped_method(self, *args, **kwargs)
+            except NoResultFound:
+                raise not_found
+            except IntegrityError as e:
+                self._raise_app_error_for_integrity_error(e)
+                raise e
+
+        return wrapper
+
+    if method is None:
+        return decorator
+
+    return decorator(method)
 
 
 class TaskRepositoryCommon(SQLAlchemyRepository):

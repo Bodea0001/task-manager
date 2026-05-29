@@ -27,7 +27,12 @@ from dto.tasks import (
     UpdateTaskData,
     UpdateTaskOccurrence,
 )
-from exceptions import TagNotFound, TaskNotFound, TaskScheduleOverlap
+from exceptions import (
+    RecurrenceRuleNotFound,
+    RecurrenceTemplateNotFound,
+    TagNotFound,
+    TaskScheduleOverlap,
+)
 from helpers import create_tag, tag_ids
 from services.tasks import TaskService
 
@@ -248,6 +253,116 @@ async def create_materialization_conflict(
 def scheduled_start(task: Task) -> datetime:
     assert task.schedule is not None
     return task.schedule.starts_at
+
+
+@pytest.mark.asyncio
+async def test_missing_recurrence_template_raises_template_not_found(
+    task_service: TaskService,
+) -> None:
+    template_id = uuid4()
+    schedule = Schedule(starts_at=datetime(2099, 1, 1, 10, 0), ends_at=datetime(2099, 1, 1, 11, 0))
+
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.get_task_recurrence_template(TEST_USER_ID, template_id)
+
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.get_task_recurrence_rules(TEST_USER_ID, template_id)
+
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.get_task_occurrences(
+            TEST_USER_ID,
+            template_id,
+            Schedule(starts_at=datetime(2099, 1, 1), ends_at=datetime(2099, 1, 2)),
+        )
+
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.add_task_recurrence_rule(
+            TEST_USER_ID,
+            template_id,
+            AddTaskRecurrence(
+                frequency=RecurrenceFrequency.DAILY,
+                schedule=schedule,
+                occurrences_limit=1,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_foreign_recurrence_template_raises_template_not_found(
+    task_service: TaskService,
+) -> None:
+    template = await create_recurrence_template(
+        task_service,
+        user_id=TEST_OTHER_USER_ID,
+        title="foreign-template-not-found",
+    )
+
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.get_task_recurrence_template(TEST_USER_ID, template.template_id)
+
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.get_task_recurrence_rules(TEST_USER_ID, template.template_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    (
+        "update_task_recurrence",
+        "stop_task_recurrence",
+        "delete_task_recurrence",
+        "update_task_occurrence",
+        "skip_task_occurrence",
+    ),
+)
+async def test_missing_recurrence_rule_raises_rule_not_found(
+    task_service: TaskService,
+    action: str,
+) -> None:
+    recurrence_id = uuid4()
+    starts_at = datetime(2099, 1, 3, 10, 0)
+
+    with pytest.raises(RecurrenceRuleNotFound):
+        if action == "update_task_recurrence":
+            await task_service.update_task_recurrence(
+                TEST_USER_ID,
+                recurrence_id,
+                UpdateTaskRecurrence(
+                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    occurrences_limit=1,
+                ),
+            )
+        elif action == "stop_task_recurrence":
+            await task_service.stop_task_recurrence(TEST_USER_ID, recurrence_id, starts_at)
+        elif action == "delete_task_recurrence":
+            await task_service.delete_task_recurrence(TEST_USER_ID, recurrence_id)
+        elif action == "update_task_occurrence":
+            await task_service.update_task_occurrence(
+                TEST_USER_ID,
+                recurrence_id,
+                starts_at,
+                UpdateTaskOccurrence(is_cancelled=True),
+            )
+        else:
+            await task_service.skip_task_occurrence(TEST_USER_ID, recurrence_id, starts_at)
+
+
+@pytest.mark.asyncio
+async def test_foreign_recurrence_rule_raises_rule_not_found(
+    task_service: TaskService,
+) -> None:
+    template = await create_recurrence_template(
+        task_service,
+        user_id=TEST_OTHER_USER_ID,
+        title="foreign-rule-not-found",
+    )
+
+    with pytest.raises(RecurrenceRuleNotFound):
+        await task_service.stop_task_recurrence(
+            TEST_USER_ID,
+            template.rules[0].recurrence_id,
+            datetime(2099, 12, 1, 10, 0),
+        )
 
 
 @pytest.mark.asyncio
@@ -1075,7 +1190,7 @@ async def test_user_cannot_change_tags_on_another_users_recurrence_template(
         title=f"{action}-other-template",
     )
 
-    with pytest.raises(TaskNotFound):
+    with pytest.raises(RecurrenceTemplateNotFound):
         await getattr(task_service, action)(TEST_USER_ID, other_template.template_id, tag.tag_id)
 
 

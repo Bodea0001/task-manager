@@ -44,6 +44,7 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
         template_id: UUID,
         window: Schedule,
     ) -> list[TaskOccurrence]:
+        await self._raise_if_recurrence_template_does_not_belong_to_user(user_id, template_id)
         stmt = (
             self._select_task_occurrence_rows()
             .join(
@@ -88,7 +89,7 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
         row = result.one_or_none()
         return self._row_to_task_occurrence(row) if row is not None else None
 
-    @translate_repository_errors
+    @translate_repository_errors(not_found=app_exc.RecurrenceOccurrenceNotFound)
     async def update_task_occurrence(
         self,
         user_id: UUID,
@@ -219,8 +220,9 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
 
         result = await self.session.execute(stmt)
         if not result.scalar_one():
-            raise app_exc.TaskNotFound
+            raise app_exc.RecurrenceOccurrenceNotFound
 
+    @translate_repository_errors(not_found=app_exc.RecurrenceOccurrenceNotFound)
     async def _recurrence_instance_for_original_start(
         self,
         recurrence_id: UUID,
@@ -235,6 +237,7 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
         )
         return result.scalar_one()
 
+    @translate_repository_errors(not_found=app_exc.RecurrenceOccurrenceNotFound)
     async def _task_id_for_recurrence_occurrence(
         self, recurrence_id: UUID, original_starts_at: datetime
     ) -> UUID:
@@ -257,6 +260,7 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def _planned_schedule_for_recurrence_occurrence(
         self,
         recurrence_id: UUID,
