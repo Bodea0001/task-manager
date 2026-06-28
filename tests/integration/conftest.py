@@ -35,6 +35,7 @@ TEST_TABLES = (
     "scheduled_task",
     "task",
     "tag",
+    "chat",
     "user_auth",
     '"user"',
 )
@@ -140,6 +141,14 @@ def user_service(test_engine: AsyncEngine):
     from services.users import UserService
 
     return UserService(SQLAlchemyUnitOfWork(test_engine))
+
+
+@pytest.fixture
+def chat_service(test_engine: AsyncEngine):
+    from adapters.unitofwork import SQLAlchemyUnitOfWork
+    from services.chats import ChatService
+
+    return ChatService(SQLAlchemyUnitOfWork(test_engine))
 
 
 async def _create_test_user(engine: AsyncEngine, user_id: UUID, email: str) -> None:

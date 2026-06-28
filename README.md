@@ -170,6 +170,8 @@ Implemented product areas:
 - Tags and context: tag creation, renaming, removal, task tagging, contextual
   lookup, and change history.
 - Users and access: user accounts, authentication, and per-user data access.
+- Chat sessions: lightweight per-user conversation records for binding
+  authenticated users to assistant-side session state.
 
 The codebase includes domain models, DTOs, repositories, services, database
 migrations, and tests.

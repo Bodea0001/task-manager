@@ -10,6 +10,7 @@ from models.base import Base
 from models.dependencies import created_at, uuidpk
 
 if TYPE_CHECKING:
+    from models.chats import Chat
     from models.tags import Tag
     from models.tasks import Task
 
@@ -33,6 +34,9 @@ class User(Base):
     )
     created_tasks: Mapped[list["Task"]] = relationship("Task", back_populates="creator")
     created_tags: Mapped[list["Tag"]] = relationship("Tag", back_populates="creator")
+    created_chats: Mapped[list["Chat"]] = relationship(
+        "Chat", back_populates="creator", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         CheckConstraint("length(first_name) > 0", "non_empty_first_name"),

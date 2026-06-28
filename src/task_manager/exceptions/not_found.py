@@ -35,6 +35,12 @@ class TagNotFound(NotFound):
         super().__init__(message)
 
 
+class ChatNotFound(NotFound):
+    def __init__(self):
+        message = "Chat not found"
+        super().__init__(message)
+
+
 class UserNotFound(NotFound):
     def __init__(self):
         message = "User not found"

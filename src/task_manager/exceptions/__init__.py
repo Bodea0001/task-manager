@@ -4,6 +4,7 @@ from exceptions.auth import AuthError, InvalidCredentials, InvalidToken
 from exceptions.conflict import Conflict, EmailAlreadyExists
 from exceptions.not_found import (
     NotFound,
+    ChatNotFound,
     TagNotFound,
     TaskNotFound,
     UserNotFound,
@@ -24,6 +25,7 @@ __all__ = [
     "WrongTaskInterval",
     "TaskScheduleOverlap",
     "NotFound",
+    "ChatNotFound",
     "TagNotFound",
     "TaskNotFound",
     "UserNotFound",
