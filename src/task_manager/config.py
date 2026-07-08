@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,9 +27,9 @@ class DatabaseConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
-    jwt_secret: str = "dev-only-change-me-with-at-least-32-bytes"
+    jwt_secret: str
+    password_salt: str
     jwt_algorithm: str = "HS256"
-    password_salt: str = "dev-only-password-salt"
     access_token_ttl_minutes: int = 30
     refresh_token_ttl_days: int = 30
     refresh_token_session_limit: int = 5
@@ -40,15 +41,31 @@ class RecurrenceConfig(BaseModel):
     monthly_materialization_days: int = 365
 
 
+class AgentConfig(BaseModel):
+    base_model_name: str
+    base_url: str
+    base_api_key: SecretStr
+    thinking_mode: Literal["enabled", "disabled"] = "enabled"
+    model_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
+    max_message_length: int = 4_000
+    max_iterations: int = 75
+    max_tool_calls: int = 20
+    checkpoint_durability: Literal["sync", "async", "exit"] = "exit"
+    summarization_trigger_messages: int = 25
+    summarization_keep_messages: int = 10
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         case_sensitive=False,
         env_nested_delimiter=ENV_NESTED_DELIMITER,
+        env_nested_max_split=1,
         env_prefix=ENV_PREFIX,
     )
 
     db: DatabaseConfig
-    auth: AuthConfig = AuthConfig()
+    auth: AuthConfig
+    agent: AgentConfig
     recurrence: RecurrenceConfig = RecurrenceConfig()
 
 

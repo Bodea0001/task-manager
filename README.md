@@ -172,6 +172,9 @@ Implemented product areas:
 - Users and access: user accounts, authentication, and per-user data access.
 - Chat sessions: lightweight per-user conversation records for binding
   authenticated users to assistant-side session state.
+- Assistant agent: natural-language task-management requests, safe service-layer
+  tool execution, progress updates, chat-bound memory, and Langfuse tracing when
+  configured.
 
 The codebase includes domain models, DTOs, repositories, services, database
 migrations, and tests.
@@ -180,7 +183,6 @@ Not included yet:
 
 - Production user interface.
 - HTTP API.
-- Final AI-agent integration.
 
 ## Development
 
@@ -205,6 +207,25 @@ For non-local use, also set strong authentication secrets:
 ```bash
 TASK_CONFIG_AUTH_JWT_SECRET=change-me-to-a-long-random-secret
 TASK_CONFIG_AUTH_PASSWORD_SALT=change-me-to-a-long-random-salt
+```
+
+Configure the assistant model before running agent code:
+
+```bash
+TASK_CONFIG_AGENT_BASE_MODEL_NAME=deepseek-v4-flash
+TASK_CONFIG_AGENT_BASE_URL=https://api.deepseek.com
+TASK_CONFIG_AGENT_BASE_API_KEY=your-model-api-key
+```
+
+For local experiments, the model settings can point to any OpenAI-compatible
+tool-capable endpoint, such as a local Ollama server.
+
+To enable Langfuse traces, configure Langfuse credentials:
+
+```bash
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
 ```
 
 Run tests:
