@@ -11,7 +11,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from agents.types import AgentGraph
 from agents.routing import TOOL_ROUTER_NEEDS_CONTEXT, ToolProfileRouter
 from agents.models import create_base_chat_model
-from agents.schemas.common import AgentState, AgentContext
+from agents.schemas.state import AgentState
+from agents.schemas.context import AgentContext
 from agents.tools.registry import ToolProfile
 from agents.agents.task_manager import create_task_manager_agent
 

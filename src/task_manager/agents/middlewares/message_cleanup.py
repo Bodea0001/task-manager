@@ -5,7 +5,8 @@ from langchain_core.messages import AIMessage, BaseMessage, RemoveMessage, ToolM
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents.middleware.types import AgentState as LangChainAgentState
 
-from agents.schemas.common import AgentContext, AgentResult, AgentStatus
+from agents.schemas.result import AgentResult, AgentStatus
+from agents.schemas.context import AgentContext
 
 
 class CompletedRunMessageCleanupMiddleware(

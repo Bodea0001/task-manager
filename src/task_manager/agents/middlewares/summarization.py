@@ -5,7 +5,8 @@ from langchain_core.messages import BaseMessage
 from langchain.agents.middleware import SummarizationMiddleware
 from langchain.agents.middleware.types import AgentState as LangChainAgentState
 
-from agents.schemas.common import AgentContext, AgentResult
+from agents.schemas.result import AgentResult
+from agents.schemas.context import AgentContext
 
 
 SUMMARY_SOURCE = "summarization"

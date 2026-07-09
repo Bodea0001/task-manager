@@ -1,5 +1,5 @@
 from agents.app import AgentApplication
-from agents.schemas.common import AgentResult, AgentStatus
+from agents.schemas.result import AgentResult, AgentStatus
 
 
 __all__ = [

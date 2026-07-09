@@ -8,7 +8,8 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain.agents.middleware.types import AgentMiddleware, hook_config
 from langchain.agents.middleware.types import AgentState as LangChainAgentState
 
-from agents.schemas.common import AgentContext, AgentResult, AgentStatus
+from agents.schemas.result import AgentResult, AgentStatus
+from agents.schemas.context import AgentContext
 
 
 _GUARD_MARKER = "task_manager_repeated_tool_call_guard"

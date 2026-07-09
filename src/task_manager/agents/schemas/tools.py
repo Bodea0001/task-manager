@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, NaiveDatetime, field_validato
 from langchain.tools import ToolRuntime, InjectedToolArg
 from pydantic.json_schema import SkipJsonSchema
 
-from agents.schemas.common import AgentContext
+from agents.schemas.context import AgentContext
 from domain.value_objects.tasks import RecurrenceFrequency, Schedule, TaskPriority, TaskStatus
 
 

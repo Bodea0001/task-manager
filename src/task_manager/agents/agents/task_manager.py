@@ -10,7 +10,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from config import settings
 from agents.prompts import TASK_MANAGER_SUMMARY_PROMPT, load_task_manager_prompt
 from agents.types import AgentGraph
-from agents.schemas.common import AgentState, AgentContext, AgentResult
+from agents.schemas.state import AgentState
+from agents.schemas.result import AgentResult
+from agents.schemas.context import AgentContext
 from agents.tools.registry import ToolProfile, get_task_tools, get_read_tools
 from agents.middlewares import (
     TaskManagerSummarizationMiddleware,

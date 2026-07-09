@@ -29,7 +29,8 @@ from agents.progress import (
     AgentProgressCallback,
     AgentProgressCallbackHandler,
 )
-from agents.schemas.common import AgentContext, AgentResult, AgentStatus
+from agents.schemas.result import AgentResult, AgentStatus
+from agents.schemas.context import AgentContext
 
 
 PSYCOPG_DB_URL = f"{settings.db.database}://{settings.db.user}:{settings.db.password}@{settings.db.host}:{settings.db.port}/{settings.db.name}"
