@@ -4,7 +4,6 @@ from typing import Any
 from langchain.tools import tool
 
 import exceptions as app_exc
-from agents.tools.registry import ToolProfile, register_tool
 from agents.schemas.tools import (
     HiddenRuntime,
     CreateTagInput,
@@ -18,7 +17,6 @@ from domain.value_objects.audit import AuditEvent
 from domain.value_objects.tags import Tag
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "list_tags",
     description="List the authenticated user's tags.",
@@ -45,7 +43,6 @@ async def list_tags(
     return {"status": "ok", "count": len(tags), "tags": [_tag_to_dict(tag) for tag in tags]}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.TAGS,))
 @tool(
     "get_tag",
     description="Get one tag by exact tag id.",
@@ -67,7 +64,6 @@ async def get_tag(tag_id: UUID, runtime: HiddenRuntime) -> dict[str, Any]:
     return {"status": "ok", "tag": _tag_to_dict(tag)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.TAGS,))
 @tool(
     "get_tag_history",
     description="Get audit history for one tag by exact tag id.",
@@ -101,7 +97,6 @@ async def get_tag_history(
     return {"status": "ok", "events": [_audit_event_to_dict(event) for event in events]}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TAGS,))
 @tool(
     "create_tag",
     description="Create one tag for the authenticated user.",
@@ -123,7 +118,6 @@ async def create_tag(name: str, runtime: HiddenRuntime) -> dict[str, Any]:
     return {"status": "ok", "tag": _tag_to_dict(tag)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "ensure_tag",
     description="Find or create one tag by name for the authenticated user.",
@@ -145,7 +139,6 @@ async def ensure_tag(name: str, runtime: HiddenRuntime) -> dict[str, Any]:
     return {"status": "ok", "tag": _tag_to_dict(tag)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TAGS,))
 @tool(
     "update_tag",
     description="Rename one tag by exact tag id.",

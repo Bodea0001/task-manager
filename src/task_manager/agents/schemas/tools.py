@@ -261,6 +261,17 @@ class DeleteTaskScheduleInput(TaskIdToolInput):
     pass
 
 
+class UpdateTaskScheduleInput(TaskIdToolInput):
+    schedule: Schedule = Field(
+        description="New scheduled execution window without timezone offsets."
+    )
+
+    @field_validator("schedule")
+    @classmethod
+    def validate_schedule_datetimes_are_naive(cls, schedule: Schedule) -> Schedule:
+        return _validate_schedule_is_naive(schedule)
+
+
 class TaskTagInput(TaskIdToolInput):
     tag_id: UUID = Field(description="Exact tag id for this operation.")
 

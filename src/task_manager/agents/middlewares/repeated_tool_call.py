@@ -13,7 +13,6 @@ from agents.schemas.context import AgentContext
 
 
 _GUARD_MARKER = "task_manager_repeated_tool_call_guard"
-_SUMMARY_SOURCE = "summarization"
 logger = getLogger(__name__)
 
 
@@ -159,7 +158,7 @@ def _previous_call_was_guarded(messages: Sequence[BaseMessage]) -> bool:
 
 
 def _is_user_turn_boundary(message: BaseMessage) -> bool:
-    return message.type == "human" and message.additional_kwargs.get("lc_source") != _SUMMARY_SOURCE
+    return message.type == "human"
 
 
 def _is_non_mutating_tool_call(

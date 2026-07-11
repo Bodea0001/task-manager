@@ -212,10 +212,18 @@ TASK_CONFIG_AUTH_PASSWORD_SALT=change-me-to-a-long-random-salt
 Configure the assistant model before running agent code:
 
 ```bash
-TASK_CONFIG_AGENT_BASE_MODEL_NAME=deepseek-v4-flash
+TASK_CONFIG_AGENT_PLANNER_MODEL_NAME=your-planning-model
+TASK_CONFIG_AGENT_SUBAGENT_MODEL_NAME=your-tool-capable-model
 TASK_CONFIG_AGENT_BASE_URL=https://api.deepseek.com
 TASK_CONFIG_AGENT_BASE_API_KEY=your-model-api-key
 ```
+
+The planner model should be capable of reliable request decomposition. The
+subagent model can be lighter, but must support tool calls. Planner reasoning is
+enabled by default, while subagent reasoning is disabled for tool compatibility;
+override these defaults with `TASK_CONFIG_AGENT_PLANNER_THINKING_MODE` and
+`TASK_CONFIG_AGENT_SUBAGENT_THINKING_MODE` when the provider requires different
+settings.
 
 For local experiments, the model settings can point to any OpenAI-compatible
 tool-capable endpoint, such as a local Ollama server.

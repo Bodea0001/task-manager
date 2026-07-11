@@ -1,4 +1,4 @@
-TASK_MANAGER_SUMMARY_PROMPT = """Summarize historical conversation context for a task-management agent.
+PLANNER_SUMMARY_PROMPT = """Summarize historical conversation context for a task-management planner.
 
 The summary will replace older messages. Newer messages may remain after this
 summary, so the generated summary must be self-contained and must not claim to

@@ -2,10 +2,7 @@ from datetime import datetime
 
 from langchain.tools import tool
 
-from agents.tools.registry import ToolProfile, register_tool
 
-
-@register_tool(read_only=True, profiles=(ToolProfile.TASK_READ,))
 @tool(
     "get_current_datetime",
     description="Get the current date and time for interpreting relative task deadlines.",

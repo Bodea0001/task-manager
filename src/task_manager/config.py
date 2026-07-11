@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import AliasChoices, BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,10 +42,16 @@ class RecurrenceConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    base_model_name: str
+    planner_model_name: str = Field(
+        validation_alias=AliasChoices("planner_model_name", "base_model_name")
+    )
+    subagent_model_name: str = Field(
+        validation_alias=AliasChoices("subagent_model_name", "base_model_name")
+    )
     base_url: str
     base_api_key: SecretStr
-    thinking_mode: Literal["enabled", "disabled"] = "enabled"
+    planner_thinking_mode: Literal["enabled", "disabled"] = "enabled"
+    subagent_thinking_mode: Literal["enabled", "disabled"] = "disabled"
     model_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
     max_message_length: int = 4_000
     max_iterations: int = 75

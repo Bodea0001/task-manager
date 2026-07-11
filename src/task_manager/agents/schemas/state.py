@@ -8,6 +8,7 @@ from langgraph.channels.ephemeral_value import EphemeralValue
 from langchain.agents.middleware.types import JumpTo, OmitFromInput, PrivateStateAttr
 
 from agents.schemas.result import AgentResult
+from agents.schemas.planning import AgentPlan
 
 
 def _messages_reducer(state: Sequence[BaseMessage], writes: Sequence[Any]) -> list[BaseMessage]:
@@ -20,5 +21,6 @@ def _messages_reducer(state: Sequence[BaseMessage], writes: Sequence[Any]) -> li
 class AgentState(TypedDict):
     messages: Required[Annotated[Sequence[BaseMessage], DeltaChannel(_messages_reducer)]]
     jump_to: NotRequired[Annotated[JumpTo | None, EphemeralValue, PrivateStateAttr]]
-    selected_tool_profile: NotRequired[Annotated[str, OmitFromInput]]
+    plan: NotRequired[Annotated[AgentPlan | None, OmitFromInput]]
+    step_results: NotRequired[Annotated[dict[str, AgentResult], OmitFromInput]]
     structured_response: NotRequired[Annotated[AgentResult, OmitFromInput]]

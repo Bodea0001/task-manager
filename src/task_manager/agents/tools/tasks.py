@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from langchain.tools import tool
 
 import exceptions as app_exc
-from agents.tools.registry import ToolProfile, register_tool
 from dto.tasks import (
     AddTask,
     UpdateTaskData,
@@ -48,6 +47,7 @@ from agents.schemas.tools import (
     UpdateTaskInput,
     UpdateTaskOccurrenceInput,
     UpdateTaskRecurrenceInput,
+    UpdateTaskScheduleInput,
 )
 from domain.value_objects.audit import AuditEvent
 from domain.value_objects.tasks import (
@@ -64,7 +64,6 @@ from domain.value_objects.tasks import (
 )
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.TASK_READ,))
 @tool(
     "get_task",
     description="Get one task by id when the user already identified the exact task.",
@@ -91,7 +90,6 @@ async def get_task(
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.TASK_READ,))
 @tool(
     "list_tasks",
     description="List or search the user's tasks using safe filters.",
@@ -163,7 +161,6 @@ async def list_tasks(
     }
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.TASK_READ,))
 @tool(
     "count_tasks",
     description="Count the user's tasks using the same safe filters as list_tasks.",
@@ -227,7 +224,6 @@ async def count_tasks(
     return {"status": "ok", "count": count}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.TASK_READ,))
 @tool(
     "get_overdue_tasks",
     description="List overdue tasks for the authenticated user.",
@@ -252,7 +248,6 @@ async def get_overdue_tasks(
     return {"status": "ok", "count": len(tasks), "tasks": [_task_to_dict(task) for task in tasks]}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "create_task",
     description="Create one task for the authenticated user.",
@@ -304,7 +299,6 @@ async def create_task(
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "update_task",
     description="Update one task by exact task id.",
@@ -356,7 +350,6 @@ async def update_task(
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "complete_task",
     description="Complete one task by exact task id.",
@@ -383,7 +376,6 @@ async def complete_task(
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "reopen_task",
     description="Reopen one completed or cancelled task by exact task id.",
@@ -405,7 +397,6 @@ async def reopen_task(task_id: UUID, runtime: HiddenRuntime) -> dict[str, Any]:
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "cancel_task",
     description="Cancel one task by exact task id.",
@@ -427,7 +418,6 @@ async def cancel_task(task_id: UUID, runtime: HiddenRuntime) -> dict[str, Any]:
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.TASK_READ,))
 @tool(
     "get_task_history",
     description="Get audit history for one task by exact task id.",
@@ -458,7 +448,40 @@ async def get_task_history(
     return {"status": "ok", "events": [_audit_event_to_dict(event) for event in events]}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.SCHEDULE,))
+@tool(
+    "update_task_schedule",
+    description="Set or replace the schedule window for one task by exact task id.",
+    args_schema=UpdateTaskScheduleInput,
+    parse_docstring=True,
+    error_on_invalid_docstring=False,
+)
+async def update_task_schedule(
+    task_id: UUID,
+    runtime: HiddenRuntime,
+    schedule: Schedule,
+) -> dict[str, Any]:
+    """Set or replace a task schedule.
+
+    Args:
+        task_id: Exact task id to update.
+        schedule: New scheduled execution window.
+    """
+    try:
+        task = await runtime.context.task_service.update_task(
+            runtime.context.user_id,
+            task_id,
+            UpdateTaskData(schedule=schedule),
+        )
+    except ValueError as exc:
+        return _tool_error("invalid_input", str(exc), retryable=False)
+    except app_exc.TaskNotFound:
+        return _tool_error("not_found", "Task not found or not accessible.", retryable=False)
+    except app_exc.TaskScheduleOverlap:
+        return _tool_error("conflict", "Task schedule overlaps another task.", retryable=False)
+
+    return {"status": "ok", "task": _task_to_dict(task)}
+
+
 @tool(
     "get_free_time",
     description="Find free time inside one or more schedule windows.",
@@ -482,7 +505,6 @@ async def get_free_time(runtime: HiddenRuntime, windows: tuple[Schedule, ...]) -
     return {"status": "ok", "free_time": [_free_time_to_dict(item) for item in free_time]}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.SCHEDULE,))
 @tool(
     "check_schedule_availability",
     description="Check whether a schedule window conflicts with existing user tasks.",
@@ -506,7 +528,6 @@ async def check_schedule_availability(runtime: HiddenRuntime, window: Schedule) 
     return {"status": "ok", "availability": _schedule_availability_to_dict(availability)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.SCHEDULE,))
 @tool(
     "find_nearest_free_schedule",
     description="Find the nearest free schedule slot for a duration.",
@@ -540,7 +561,6 @@ async def find_nearest_free_schedule(
     return {"status": "ok", "schedule": _schedule_to_dict(schedule)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.SCHEDULE,))
 @tool(
     "delete_task_schedule",
     description="Remove the schedule from one task without deleting the task.",
@@ -564,7 +584,6 @@ async def delete_task_schedule(task_id: UUID, runtime: HiddenRuntime) -> dict[st
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "add_tag_to_task",
     description="Attach one tag to one task by exact ids.",
@@ -591,7 +610,6 @@ async def add_tag_to_task(task_id: UUID, tag_id: UUID, runtime: HiddenRuntime) -
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.TASK_WRITE,))
 @tool(
     "remove_tag_from_task",
     description="Remove one tag from one task by exact ids.",
@@ -620,7 +638,6 @@ async def remove_tag_from_task(
     return {"status": "ok", "task": _task_to_dict(task)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "get_task_recurrence_template",
     description="Get one recurrence template by exact id.",
@@ -644,7 +661,6 @@ async def get_task_recurrence_template(template_id: UUID, runtime: HiddenRuntime
     return {"status": "ok", "template": _recurrence_template_to_dict(template)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "list_task_recurrence_templates",
     description="List recurrence templates using safe filters.",
@@ -686,7 +702,6 @@ async def list_task_recurrence_templates(
     }
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "count_task_recurrence_templates",
     description="Count recurrence templates using the same safe filters as list_task_recurrence_templates.",
@@ -724,7 +739,6 @@ async def count_task_recurrence_templates(
     return {"status": "ok", "count": count}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "create_task_recurrence_template",
     description="Create a recurrence template with one or more recurrence rules.",
@@ -777,7 +791,6 @@ async def create_task_recurrence_template(
     return {"status": "ok", "template": _recurrence_template_to_dict(template)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "get_task_recurrence_rules",
     description="List recurrence rules for one recurrence template.",
@@ -801,7 +814,6 @@ async def get_task_recurrence_rules(template_id: UUID, runtime: HiddenRuntime) -
     return {"status": "ok", "rules": [_recurrence_rule_to_dict(rule) for rule in rules]}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "add_task_recurrence_rule",
     description="Add one recurrence rule to an existing recurrence template.",
@@ -848,7 +860,6 @@ async def add_task_recurrence_rule(
     return {"status": "ok", "rule": _recurrence_rule_to_dict(rule)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "update_task_recurrence_rule",
     description="Update one recurrence rule schedule or end condition.",
@@ -889,7 +900,6 @@ async def update_task_recurrence_rule(
     return {"status": "ok", "rule": _recurrence_rule_to_dict(rule)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "stop_task_recurrence",
     description="Stop one recurrence rule from an absolute datetime.",
@@ -916,7 +926,6 @@ async def stop_task_recurrence(
     return {"status": "ok", "rule": _recurrence_rule_to_dict(rule)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "get_task_occurrences",
     description="List recurrence occurrences for a template inside a time window.",
@@ -943,7 +952,6 @@ async def get_task_occurrences(
     return {"status": "ok", "occurrences": [_occurrence_to_dict(item) for item in occurrences]}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "get_recurrence_instance_by_task",
     description="Get recurrence occurrence metadata for one materialized task id.",
@@ -970,7 +978,6 @@ async def get_recurrence_instance_by_task(task_id: UUID, runtime: HiddenRuntime)
     }
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "update_task_occurrence",
     description="Update or cancel one recurrence occurrence override.",
@@ -1026,7 +1033,6 @@ async def update_task_occurrence(
     return {"status": "ok", "occurrence": _occurrence_to_dict(occurrence)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "skip_task_occurrence",
     description="Skip one recurrence occurrence by original start datetime.",
@@ -1053,7 +1059,6 @@ async def skip_task_occurrence(
     return {"status": "ok", "occurrence": _occurrence_to_dict(occurrence)}
 
 
-@register_tool(read_only=True, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "get_task_recurrence_template_history",
     description="Get audit history for one recurrence template.",
@@ -1084,7 +1089,6 @@ async def get_task_recurrence_template_history(
     return {"status": "ok", "events": [_audit_event_to_dict(event) for event in events]}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "add_tag_to_recurrence_template",
     description="Attach a tag to one recurrence template by exact ids.",
@@ -1111,7 +1115,6 @@ async def add_tag_to_recurrence_template(
     return {"status": "ok", "template": _recurrence_template_to_dict(template)}
 
 
-@register_tool(read_only=False, profiles=(ToolProfile.RECURRENCE,))
 @tool(
     "remove_tag_from_recurrence_template",
     description="Remove a tag from one recurrence template by exact ids.",

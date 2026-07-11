@@ -3,14 +3,13 @@ from uuid import UUID
 from typing import Any
 from datetime import datetime
 from logging import getLogger
-from collections.abc import Sequence
 
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
-from openai import BadRequestError, APIConnectionError
+from openai import APIConnectionError
 from langfuse.langchain import CallbackHandler
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, RemoveMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphRecursionError
@@ -23,14 +22,15 @@ from config import settings
 from services.tags import TagService
 from services.tasks import TaskService
 from agents.types import AgentGraph
+from agents.agents import PlannerResultError
 from agents.graph import build_agent_graph
 from agents.progress import (
-    emit_progress,
-    AgentProgressCallback,
-    AgentProgressCallbackHandler,
+    AgentPlanProgressCallback,
+    AgentPlanProgressCallbackHandler,
 )
 from agents.schemas.result import AgentResult, AgentStatus
 from agents.schemas.context import AgentContext
+from agents.schemas.planning import AgentPlan, PlanStatus, PlanStep, PlanStepStatus
 
 
 PSYCOPG_DB_URL = f"{settings.db.database}://{settings.db.user}:{settings.db.password}@{settings.db.host}:{settings.db.port}/{settings.db.name}"
@@ -74,7 +74,7 @@ class AgentApplication:
         chat_id: UUID,
         task_service: TaskService,
         tag_service: TagService,
-        progress_callback: AgentProgressCallback | None = None,
+        plan_progress_callback: AgentPlanProgressCallback | None = None,
     ) -> AgentResult:
         """Run one user message in a chat-bound agent session."""
         logger.info("Running agent graph for user_id=%s chat_id=%s", user_id, chat_id)
@@ -89,20 +89,13 @@ class AgentApplication:
             return normalized_message
 
         try:
-            await emit_progress(
-                progress_callback,
-                "Analyzing the request...",
-                stage="request_validation_completed",
-                user_id=str(user_id),
-                chat_id=str(chat_id),
-            )
             graph_result = await self._invoke_graph(
                 normalized_message,
                 user_id=user_id,
                 chat_id=chat_id,
                 task_service=task_service,
                 tag_service=tag_service,
-                progress_callback=progress_callback,
+                plan_progress_callback=plan_progress_callback,
             )
             result = self._to_agent_result(graph_result)
             logger.info(
@@ -112,6 +105,13 @@ class AgentApplication:
                 result.status,
             )
             return result
+        except PlannerResultError:
+            logger.exception(
+                "Agent planner returned invalid results user_id=%s chat_id=%s",
+                user_id,
+                chat_id,
+            )
+            return _planner_failure_result()
         except GraphRecursionError:
             logger.exception(
                 "Agent graph reached recursion limit user_id=%s chat_id=%s limit=%s",
@@ -149,32 +149,6 @@ class AgentApplication:
             return AgentResult(
                 status=AgentStatus.REJECTED,
                 message="The model endpoint is unavailable. Try again later.",
-            )
-        except BadRequestError as exc:
-            if not _is_missing_tool_messages_error(exc):
-                raise
-            logger.exception(
-                "Agent checkpoint contains incomplete tool-call messages user_id=%s chat_id=%s",
-                user_id,
-                chat_id,
-            )
-            repaired_messages = await self._repair_incomplete_tool_call_messages(chat_id)
-            if repaired_messages:
-                return await self._retry_after_checkpoint_repair(
-                    normalized_message,
-                    user_id=user_id,
-                    chat_id=chat_id,
-                    task_service=task_service,
-                    tag_service=tag_service,
-                    progress_callback=progress_callback,
-                )
-
-            return AgentResult(
-                status=AgentStatus.REJECTED,
-                message=(
-                    "The agent conversation state contains an incomplete tool call. "
-                    "No repairable checkpoint messages were found."
-                ),
             )
         except Exception:
             logger.exception("Agent graph failed user_id=%s chat_id=%s", user_id, chat_id)
@@ -265,14 +239,14 @@ class AgentApplication:
         chat_id: UUID,
         task_service: TaskService,
         tag_service: TagService,
-        progress_callback: AgentProgressCallback | None = None,
+        plan_progress_callback: AgentPlanProgressCallback | None = None,
     ) -> dict[str, Any]:
         return await self._get_graph().ainvoke(
             {"messages": [HumanMessage(content=_message_with_runtime_context(message))]},
             config=self._create_graph_config(
                 chat_id,
                 user_id=user_id,
-                progress_callback=progress_callback,
+                plan_progress_callback=plan_progress_callback,
             ),
             durability=settings.agent.checkpoint_durability,
             context=AgentContext(
@@ -282,84 +256,18 @@ class AgentApplication:
             ),
         )
 
-    async def _repair_incomplete_tool_call_messages(self, chat_id: UUID) -> int:
-        config = self._create_graph_config(chat_id)
-        state = await self._get_graph().aget_state(config)
-        messages = _state_messages(state.values)
-        message_updates = _build_incomplete_tool_call_repair_updates(messages)
-
-        if not message_updates:
-            logger.warning("No incomplete tool-call messages found for chat_id=%s", chat_id)
-            return 0
-
-        await self._get_graph().aupdate_state(
-            config,
-            {"messages": message_updates},
-            as_node="model",
-        )
-        logger.info(
-            "Removed incomplete tool-call checkpoint messages chat_id=%s count=%s",
-            chat_id,
-            len(message_updates),
-        )
-        return len(message_updates)
-
-    async def _retry_after_checkpoint_repair(
-        self,
-        message: str,
-        user_id: UUID,
-        chat_id: UUID,
-        task_service: TaskService,
-        tag_service: TagService,
-        progress_callback: AgentProgressCallback | None = None,
-    ) -> AgentResult:
-        await emit_progress(
-            progress_callback,
-            "Continuing request processing...",
-            stage="checkpoint_repaired",
-            user_id=str(user_id),
-            chat_id=str(chat_id),
-        )
-        try:
-            graph_result = await self._invoke_graph(
-                message,
-                user_id=user_id,
-                chat_id=chat_id,
-                task_service=task_service,
-                tag_service=tag_service,
-                progress_callback=progress_callback,
-            )
-        except BadRequestError as exc:
-            if not _is_missing_tool_messages_error(exc):
-                raise
-            logger.exception(
-                "Agent checkpoint still contains incomplete tool-call messages after repair "
-                "user_id=%s chat_id=%s",
-                user_id,
-                chat_id,
-            )
-            return AgentResult(
-                status=AgentStatus.REJECTED,
-                message=(
-                    "The agent conversation state still contains an incomplete tool call "
-                    "after repair."
-                ),
-            )
-
-        return self._to_agent_result(graph_result)
-
     def _create_graph_config(
         self,
         chat_id: UUID,
         user_id: UUID | None = None,
         run_name: str = "task-manager-agent",
-        progress_callback: AgentProgressCallback | None = None,
+        plan_progress_callback: AgentPlanProgressCallback | None = None,
     ) -> RunnableConfig:
         return {
             "run_name": run_name,
             "recursion_limit": settings.agent.max_iterations,
             "configurable": {"thread_id": str(chat_id)},
-            "callbacks": _create_agent_callbacks(progress_callback),
+            "callbacks": _create_agent_callbacks(plan_progress_callback),
             "metadata": _create_langfuse_metadata(
                 user_id=user_id,
                 chat_id=chat_id,
@@ -373,8 +281,8 @@ class AgentApplication:
 
         logger.debug("Agent graph did not return structured response")
         return AgentResult(
-            status=AgentStatus.COMPLETED,
-            message=_last_message_content(graph_result) or "Done.",
+            status=AgentStatus.REJECTED,
+            message="The agent did not produce a valid structured response.",
         )
 
     def _get_graph(self) -> AgentGraph:
@@ -393,23 +301,14 @@ class AgentApplication:
         return self._checkpointer
 
 
-def _last_message_content(result: dict[str, Any]) -> str:
-    messages = result.get("messages") or []
-    if not messages:
-        return ""
-
-    last_message = messages[-1]
-    if isinstance(last_message, AIMessage):
-        content = last_message.content
-    elif isinstance(last_message, dict):
-        content = last_message.get("content", "")
-    else:
-        content = getattr(last_message, "content", "")
-
-    if isinstance(content, str):
-        return content
-
-    return str(content)
+def _planner_failure_result() -> AgentResult:
+    return AgentResult(
+        status=AgentStatus.REJECTED,
+        message=(
+            "The request could not be planned because the model returned an invalid response. "
+            "Try again."
+        ),
+    )
 
 
 def _message_with_runtime_context(message: str) -> str:
@@ -433,75 +332,17 @@ def _current_datetime_context() -> str:
     )
 
 
-def _state_messages(state_values: dict[str, Any] | Any) -> list[BaseMessage]:
-    if not isinstance(state_values, dict):
-        return []
-
-    messages = state_values.get("messages")
-    if not isinstance(messages, Sequence):
-        return []
-
-    return [message for message in messages if isinstance(message, BaseMessage)]
-
-
-def _build_incomplete_tool_call_repair_updates(
-    messages: Sequence[BaseMessage],
-) -> list[RemoveMessage]:
-    incomplete_message_index = _find_first_incomplete_tool_call_message_index(messages)
-    if incomplete_message_index is None:
-        return []
-
-    messages_to_remove = messages[incomplete_message_index:]
-    return [
-        RemoveMessage(id=message.id) for message in messages_to_remove if message.id is not None
-    ]
-
-
-def _find_first_incomplete_tool_call_message_index(
-    messages: Sequence[BaseMessage],
-) -> int | None:
-    for index, message in enumerate(messages):
-        if not isinstance(message, AIMessage) or not message.tool_calls:
-            continue
-
-        expected_tool_call_ids = _message_tool_call_ids(message)
-        next_index = index + 1
-        while next_index < len(messages):
-            next_message = messages[next_index]
-            if not isinstance(next_message, ToolMessage):
-                break
-
-            expected_tool_call_ids.discard(next_message.tool_call_id)
-            next_index += 1
-
-        if expected_tool_call_ids:
-            return index
-
-    return None
-
-
-def _message_tool_call_ids(message: AIMessage) -> set[str]:
-    tool_call_ids: set[str] = set()
-    for tool_call in message.tool_calls:
-        tool_call_id = tool_call.get("id")
-        if isinstance(tool_call_id, str):
-            tool_call_ids.add(tool_call_id)
-
-    return tool_call_ids
-
-
 def _create_checkpoint_serializer() -> JsonPlusSerializer:
     return JsonPlusSerializer(
         allowed_msgpack_modules=[
             AgentResult,
             AgentStatus,
+            AgentPlan,
+            PlanStatus,
+            PlanStep,
+            PlanStepStatus,
         ]
     )
-
-
-def _is_missing_tool_messages_error(exc: BadRequestError) -> bool:
-    message = str(exc)
-    return "tool_calls" in message and "tool messages" in message and "tool_call_id" in message
 
 
 def _create_langfuse_metadata(user_id: UUID | None, chat_id: UUID) -> dict[str, Any]:
@@ -516,11 +357,11 @@ def _create_langfuse_metadata(user_id: UUID | None, chat_id: UUID) -> dict[str, 
 
 
 def _create_agent_callbacks(
-    progress_callback: AgentProgressCallback | None = None,
+    plan_progress_callback: AgentPlanProgressCallback | None = None,
 ) -> list[BaseCallbackHandler]:
     callbacks: list[BaseCallbackHandler] = []
-    if progress_callback is not None:
-        callbacks.append(AgentProgressCallbackHandler(progress_callback))
+    if plan_progress_callback is not None:
+        callbacks.append(AgentPlanProgressCallbackHandler(plan_progress_callback))
     if os.getenv("LANGFUSE_PUBLIC_KEY"):
         callbacks.append(CallbackHandler())
     return callbacks
