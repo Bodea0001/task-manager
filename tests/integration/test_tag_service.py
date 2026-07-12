@@ -12,7 +12,7 @@ from domain.value_objects.tasks import RecurrenceFrequency, Schedule
 from dto.tasks import AddTaskRecurrence, AddTaskRecurrenceTemplate
 from services.tags import TagService
 from services.tasks import TaskService
-from exceptions import TagNotFound
+from exceptions import TagAlreadyExists, TagNotFound
 
 
 pytestmark = pytest.mark.integration
@@ -87,6 +87,19 @@ async def test_user_can_update_tag(tag_service: TagService) -> None:
     # Assert
     assert sut.tag_id == tag.tag_id
     assert sut.name == f"{TEST_TAG_PREFIX}updated"
+
+
+@pytest.mark.asyncio
+async def test_active_tag_names_are_unique_per_user(tag_service: TagService) -> None:
+    name = f"{TEST_TAG_PREFIX}unique"
+    await tag_service.create_tag(TEST_USER_ID, name)
+    other_tag = await tag_service.create_tag(TEST_USER_ID, f"{name}-other")
+
+    with pytest.raises(TagAlreadyExists):
+        await tag_service.create_tag(TEST_USER_ID, name)
+
+    with pytest.raises(TagAlreadyExists):
+        await tag_service.update_tag(TEST_USER_ID, other_tag.tag_id, name)
 
 
 @pytest.mark.asyncio

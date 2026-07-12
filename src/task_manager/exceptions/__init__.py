@@ -1,7 +1,7 @@
 from exceptions.base import BaseAppException
 from exceptions.wrong import Wrongness, WrongTaskInterval, TaskScheduleOverlap
 from exceptions.auth import AuthError, InvalidCredentials, InvalidToken
-from exceptions.conflict import Conflict, EmailAlreadyExists
+from exceptions.conflict import Conflict, EmailAlreadyExists, TagAlreadyExists
 from exceptions.not_found import (
     NotFound,
     ChatNotFound,
@@ -21,6 +21,7 @@ __all__ = [
     "InvalidToken",
     "Conflict",
     "EmailAlreadyExists",
+    "TagAlreadyExists",
     "Wrongness",
     "WrongTaskInterval",
     "TaskScheduleOverlap",

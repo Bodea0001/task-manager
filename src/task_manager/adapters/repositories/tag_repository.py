@@ -3,8 +3,9 @@ from typing import Concatenate, ParamSpec, TypeVar
 from collections.abc import Awaitable, Callable
 from functools import wraps
 
+import asyncpg
 from sqlalchemy import text, select, insert, update
-from sqlalchemy.exc import NoResultFound
+from sqlalchemy.exc import IntegrityError, NoResultFound
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 import exceptions as app_exc
@@ -15,6 +16,7 @@ from adapters.repository import SQLAlchemyRepository
 
 P = ParamSpec("P")
 R = TypeVar("R")
+TAG_NAME_CONSTRAINT = "ix_tag_active_creator_id_name"
 
 
 def translate_repository_errors(
@@ -26,6 +28,12 @@ def translate_repository_errors(
             return await method(self, *args, **kwargs)
         except NoResultFound:
             raise app_exc.TagNotFound
+        except IntegrityError as error:
+            driver_error = getattr(error.orig, "__cause__", None)
+            if isinstance(driver_error, asyncpg.exceptions.UniqueViolationError):
+                if TAG_NAME_CONSTRAINT in str(error.orig):
+                    raise app_exc.TagAlreadyExists
+            raise
 
     return wrapper
 
@@ -116,6 +124,7 @@ class TagRepository(SQLAlchemyRepository):
 
         return self._model_to_tag(tag_model)
 
+    @translate_repository_errors
     async def add_tag(self, user_id: UUID, name: str) -> Tag:
         stmt = insert(TagModel).values(creator_id=user_id, name=name).returning(TagModel)
 
