@@ -1,19 +1,17 @@
-from config import settings
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+from config import DatabaseConfig, settings
 
 DB_URL = settings.db.url
-ECHO = False
-ECHO_POOL = False
-POOL_SIZE = 50
-MAX_OVERFLOW = 10
 
 
-engine = create_async_engine(
-    url=DB_URL,
-    echo=ECHO,
-    echo_pool=ECHO_POOL,
-    pool_size=POOL_SIZE,
-    max_overflow=MAX_OVERFLOW,
-)
+def create_database_engine(config: DatabaseConfig | None = None) -> AsyncEngine:
+    """Create an application-owned SQLAlchemy engine."""
+    database_config = config or settings.db
 
-session_maker = async_sessionmaker(bind=engine, expire_on_commit=False)
+    return create_async_engine(
+        url=database_config.url,
+        pool_size=database_config.pool_size,
+        max_overflow=database_config.max_overflow,
+        pool_timeout=database_config.pool_timeout_seconds,
+    )
