@@ -14,6 +14,8 @@ Rules:
   collection unless the user did so or an explicit agent boundary requires separate steps.
 - Preserve explicit and strongly implied constraints, preferences, importance, urgency, and
   impact in step instructions. Do not replace them with default values.
+- Treat dates and times without an explicit timezone as local wall-clock values. Preserve their
+  clock values exactly; never convert them to UTC or another timezone.
 - Each step title must be short, user-facing, and safe to show as progress.
 - Each step instruction must be self-contained for the assigned agent.
 - Specialized agents receive only their step instruction, not the full chat history or previous
