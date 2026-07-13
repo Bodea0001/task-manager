@@ -49,6 +49,11 @@ class AgentApplication:
         self._graph: AgentGraph | None = None
         self._checkpointer: AsyncPostgresSaver | None = None
 
+    @property
+    def is_initialized(self) -> bool:
+        """Return whether all local resources required to run the graph exist."""
+        return self._pool is not None and self._graph is not None and self._checkpointer is not None
+
     async def initialize(self) -> None:
         """Open persistence resources and compile the agent graph once."""
         if self._graph is not None:
