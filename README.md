@@ -170,8 +170,8 @@ Implemented product areas:
 - Tags and context: tag creation, renaming, removal, task tagging, contextual
   lookup, and change history.
 - Users and access: user accounts, authentication, and per-user data access.
-- Chat sessions: lightweight per-user conversation records for binding
-  authenticated users to assistant-side session state.
+- Chat sessions: titled per-user conversations with paginated, persistent
+  user-visible message history and strict ownership boundaries.
 - Assistant agent: natural-language task-management requests, safe service-layer
   tool execution, progress updates, chat-bound memory, and Langfuse tracing when
   configured.

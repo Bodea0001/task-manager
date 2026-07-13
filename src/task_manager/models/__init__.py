@@ -1,6 +1,6 @@
 from models.base import Base
 from models.audit import AuditEvent
-from models.chats import Chat
+from models.chats import Chat, ChatMessage
 from models.tags import Tag
 from models.task_tags import TaskRecurrenceTemplateTag, TaskTag
 from models.tasks import (
@@ -21,6 +21,7 @@ __all__ = [
     "Base",
     "AuditEvent",
     "Chat",
+    "ChatMessage",
     "Tag",
     "ScheduledTask",
     "TaskRecurrenceTemplateTag",
