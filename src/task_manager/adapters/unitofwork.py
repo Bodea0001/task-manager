@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+import exceptions as app_exc
 from domain.value_objects.isolation_level import IsolationLevel
 from adapters.repositories.audit_repository import AuditRepository
 from adapters.repositories.chat_repository import ChatRepository
@@ -93,11 +94,12 @@ class _TransactionContext:
         tb: TracebackType | None,
     ) -> None:
         try:
-            if exc_type:
-                logger.exception(
-                    "Transaction failed, rolling back",
-                    exc_info=(exc_type, exc, tb),  # type: ignore
-                )
+            if exc_type is not None and exc is not None:
+                if not isinstance(exc, app_exc.BaseAppException):
+                    logger.error(
+                        "Transaction failed, rolling back",
+                        exc_info=(exc_type, exc, tb),
+                    )
                 await self.rollback()
             else:
                 await self.commit()
