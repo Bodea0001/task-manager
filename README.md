@@ -175,6 +175,10 @@ Implemented product areas:
 - Assistant agent: natural-language task-management requests, safe service-layer
   tool execution, progress updates, chat-bound memory, and Langfuse tracing when
   configured.
+- HTTP API: liveness and readiness checks, authentication, current-user profile
+  management, chat lifecycle and history, streamed assistant requests, and
+  manual task, tag, schedule-inspection, and recurring-task workflows for
+  clients that need direct, predictable controls.
 
 The codebase includes domain models, DTOs, repositories, services, database
 migrations, and tests.
@@ -182,7 +186,6 @@ migrations, and tests.
 Not included yet:
 
 - Production user interface.
-- HTTP API.
 
 ## Development
 
@@ -202,11 +205,17 @@ TASK_CONFIG_DB_HOST=localhost
 TASK_CONFIG_DB_PORT=5432
 ```
 
-For non-local use, also set strong authentication secrets:
+Configure strong authentication secrets:
 
 ```bash
 TASK_CONFIG_AUTH_JWT_SECRET=change-me-to-a-long-random-secret
 TASK_CONFIG_AUTH_PASSWORD_SALT=change-me-to-a-long-random-salt
+```
+
+Run Redis and configure the database used to coordinate concurrent agent runs:
+
+```bash
+TASK_CONFIG_COORDINATION_REDIS_URL=redis://localhost:6379/1
 ```
 
 Configure the assistant model before running agent code:
@@ -243,15 +252,62 @@ uv run pytest tests/unit
 uv run pytest tests/integration
 ```
 
+Critical E2E tests are opt-in because they start two Granian processes and call
+the configured model provider. They use `TASK_CONFIG_DB_NAME`, which must name a
+test database, then run:
+
+```bash
+TASK_MANAGER_RUN_E2E=1 uv run pytest tests/e2e
+```
+
+The E2E environment also requires the normal database, authentication, model,
+and `TASK_CONFIG_COORDINATION_REDIS_URL` settings. Tests use public HTTP APIs,
+isolated users, two server processes, and a unique Redis key prefix. They do not
+emit Langfuse traces. `TASK_MANAGER_E2E_DB_NAME` can override the configured
+test database when stronger isolation is needed.
+
 Apply database migrations:
 
 ```bash
 uv run alembic upgrade head
 ```
 
-The integration tests require PostgreSQL. Configuration is loaded from
-environment variables with the `TASK_CONFIG` prefix, and test runs can use
-`.env` and `.test.env` files. Integration tests must run against a dedicated
-test database: `TASK_CONFIG_DB_NAME` must contain a separate `test`, `testing`
-or `pytest` part, for example `task_manager_test`. The integration test
+Run the HTTP API with Granian:
+
+```bash
+uv run granian --interface asgi --working-dir src/task_manager \
+  --log-config src/task_manager/granian_logging.json --no-access-log main:app
+```
+
+The application API is available under `/api/v1` by default. Interactive API
+documentation is available at `/docs` and `/redoc`, with the OpenAPI document at
+`/openapi.json`.
+
+When a browser frontend runs on a separate origin, allow it explicitly:
+
+```bash
+TASK_CONFIG_HTTP_CORS_ALLOWED_ORIGINS='["http://localhost:5173"]'
+TASK_CONFIG_HTTP_TRUSTED_HOSTS='["localhost", "127.0.0.1"]'
+```
+
+API documentation can be disabled with `TASK_CONFIG_HTTP_DOCS_ENABLED=false`.
+
+Application and Granian logs are written as structured JSON to standard output.
+Granian access logs are disabled in the command above because the application
+already emits one correlated completion event for every HTTP request.
+
+Use `/health/live` for process liveness. `/health/ready` reports readiness only
+when PostgreSQL and coordination Redis are reachable and the agent is
+initialized.
+
+Authenticated clients can send assistant requests with
+`POST /api/v1/chats/{chat_id}/agent`. The response is a `text/event-stream`
+containing plan progress, heartbeat, final result, or controlled error events.
+
+The integration tests require PostgreSQL and use Redis when it is available.
+Configuration is loaded from environment variables with the `TASK_CONFIG`
+prefix, and test runs can use `.env` and `.test.env` files. Integration tests
+must run against a dedicated test database: `TASK_CONFIG_DB_NAME` must contain a
+separate `test`, `testing` or `pytest` part, for example `task_manager_test`.
+Redis tests isolate their keys with a unique prefix. The integration test
 fixtures truncate application tables before and after each test.

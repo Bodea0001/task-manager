@@ -1,7 +1,15 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, Field, SecretStr
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +28,9 @@ class DatabaseConfig(BaseModel):
     user: str
     password: str
     name: str
+    pool_size: int = Field(default=10, ge=1)
+    max_overflow: int = Field(default=10, ge=0)
+    pool_timeout_seconds: float = Field(default=30.0, gt=0)
 
     @property
     def url(self) -> str:
@@ -39,6 +50,41 @@ class RecurrenceConfig(BaseModel):
     daily_materialization_days: int = 90
     weekly_materialization_days: int = 90
     monthly_materialization_days: int = 365
+
+
+class CoordinationConfig(BaseModel):
+    """Redis-backed coordination settings for distributed agent runs."""
+
+    redis_url: str = "redis://localhost:6379/1"
+    key_prefix: str = "task-manager:v1:agent-run"
+    max_connections: int = Field(default=10, ge=1)
+    connect_timeout_seconds: float = Field(default=1.0, gt=0)
+    socket_timeout_seconds: float = Field(default=1.0, gt=0)
+    health_check_interval_seconds: int = Field(default=30, ge=0)
+    lease_ttl_seconds: int = Field(default=90, ge=10)
+    lease_renew_interval_seconds: int = Field(default=20, ge=1)
+
+    @model_validator(mode="after")
+    def validate_lease_timing(self) -> "CoordinationConfig":
+        if self.lease_renew_interval_seconds >= self.lease_ttl_seconds:
+            raise ValueError("lease renewal interval must be shorter than lease TTL")
+        return self
+
+
+class HTTPConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_prefix: str = "/api/v1"
+    docs_enabled: bool = True
+    cors_allowed_origins: tuple[str, ...] = ()
+    trusted_hosts: tuple[str, ...] = ()
+
+    @field_validator("api_prefix")
+    @classmethod
+    def validate_api_prefix(cls, value: str) -> str:
+        if not value.startswith("/") or value == "/" or value.endswith("/") or "//" in value:
+            raise ValueError("api_prefix must be an absolute path without a trailing slash")
+        return value
 
 
 class AgentConfig(BaseModel):
@@ -73,6 +119,8 @@ class Settings(BaseSettings):
     auth: AuthConfig
     agent: AgentConfig
     recurrence: RecurrenceConfig = RecurrenceConfig()
+    coordination: CoordinationConfig = CoordinationConfig()
+    http: HTTPConfig = HTTPConfig()
 
 
 settings = Settings()  # type: ignore
