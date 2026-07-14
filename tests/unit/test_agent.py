@@ -651,6 +651,10 @@ def test_agent_tool_schema_contract_does_not_expose_runtime_context() -> None:
     assert "tag_service" not in fields
 
 
+def test_agent_application_is_not_initialized_before_startup() -> None:
+    assert AgentApplication().is_initialized is False
+
+
 @pytest.mark.asyncio
 async def test_agent_application_passes_trusted_context_and_trace_identity(monkeypatch) -> None:
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
@@ -688,6 +692,46 @@ async def test_agent_application_passes_trusted_context_and_trace_identity(monke
         task_service=task_service,
         tag_service=tag_service,
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_run_end_log_contains_safe_correlation_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    user_id = uuid4()
+    chat_id = uuid4()
+    app = AgentApplication()
+    app._graph = cast(
+        AgentGraph,
+        FakeAgent(
+            {
+                "structured_response": AgentResult(
+                    status=AgentStatus.COMPLETED,
+                    message="Completed.",
+                )
+            }
+        ),
+    )
+
+    with caplog.at_level("INFO", logger="agents.app"):
+        result = await app.run(
+            "private user request",
+            user_id=user_id,
+            chat_id=chat_id,
+            task_service=FakeTaskService(),
+            tag_service=FakeTagService(),
+        )
+
+    assert result.status == AgentStatus.COMPLETED
+    [record] = [
+        record for record in caplog.records if getattr(record, "event", None) == "agent_run_ended"
+    ]
+    assert getattr(record, "user_id", None) == str(user_id)
+    assert getattr(record, "chat_id", None) == str(chat_id)
+    assert getattr(record, "outcome", None) == "success"
+    assert getattr(record, "status", None) == "completed"
+    assert isinstance(getattr(record, "duration_ms", None), float)
+    assert "private user request" not in record.getMessage()
 
 
 @pytest.mark.asyncio
@@ -793,20 +837,30 @@ async def test_agent_application_rejects_when_tool_call_limit_is_reached() -> No
 
 
 @pytest.mark.asyncio
-async def test_agent_application_rejects_when_model_connection_fails() -> None:
+async def test_agent_application_rejects_when_model_connection_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     app = AgentApplication()
     app._graph = cast(AgentGraph, ConnectionErrorFakeAgent())
 
-    result = await app.run(
-        "create a task",
-        user_id=uuid4(),
-        chat_id=uuid4(),
-        task_service=FakeTaskService(),
-        tag_service=FakeTagService(),
-    )
+    with caplog.at_level("ERROR", logger="agents.app"):
+        result = await app.run(
+            "create a task",
+            user_id=uuid4(),
+            chat_id=uuid4(),
+            task_service=FakeTaskService(),
+            tag_service=FakeTagService(),
+        )
 
     assert result.status == AgentStatus.REJECTED
     assert "model endpoint is unavailable" in result.message
+    [record] = [
+        record for record in caplog.records if getattr(record, "event", None) == "agent_run_ended"
+    ]
+    assert getattr(record, "reason", None) == "model_connection_failed"
+    assert getattr(record, "error_type", None) == "APIConnectionError"
+    assert getattr(record, "outcome", None) == "error"
+    assert record.exc_info is None
 
 
 @pytest.mark.asyncio

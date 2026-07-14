@@ -88,11 +88,35 @@ class AgentPlanProgressCallbackHandler(AsyncCallbackHandler):
 
         try:
             event = AgentPlanProgressEvent.model_validate(data)
-        except ValueError:
-            logger.exception("Invalid agent plan progress event run_id=%s", run_id)
+        except ValueError as exc:
+            logger.warning(
+                "event=agent_plan_progress_rejected run_id=%s outcome=ignored "
+                "reason=invalid_event error_type=%s",
+                run_id,
+                type(exc).__name__,
+                extra={
+                    "event": "agent_plan_progress_rejected",
+                    "run_id": str(run_id),
+                    "outcome": "ignored",
+                    "reason": "invalid_event",
+                    "error_type": type(exc).__name__,
+                },
+            )
             return
 
         try:
             await self._progress_callback(event)
-        except Exception:
-            logger.exception("Agent plan progress callback failed run_id=%s", run_id)
+        except Exception as exc:
+            logger.error(
+                "event=agent_plan_progress_callback_completed run_id=%s outcome=error "
+                "error_type=%s",
+                run_id,
+                type(exc).__name__,
+                exc_info=(type(exc), exc, exc.__traceback__),
+                extra={
+                    "event": "agent_plan_progress_callback_completed",
+                    "run_id": str(run_id),
+                    "outcome": "error",
+                    "error_type": type(exc).__name__,
+                },
+            )

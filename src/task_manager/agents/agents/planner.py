@@ -47,7 +47,16 @@ class PlannerAgent:
                 allowed_agent_ids=self._allowed_agent_ids,
             )
         except PlannerResultError as exc:
-            logger.warning("Planner returned an invalid result; retrying once: %s", exc)
+            logger.warning(
+                "event=agent_planner_result_rejected attempt=1 action=retry error_type=%s",
+                type(exc).__name__,
+                extra={
+                    "event": "agent_planner_result_rejected",
+                    "attempt": 1,
+                    "action": "retry",
+                    "error_type": type(exc).__name__,
+                },
+            )
 
         retry_result = await self._model.ainvoke(
             [

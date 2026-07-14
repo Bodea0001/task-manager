@@ -46,14 +46,24 @@ class RepeatedToolCallGuardMiddleware(
 
         if _previous_call_was_guarded(messages):
             logger.warning(
-                "Forcing agent completion after repeated non-mutating tool call tool=%s",
+                "event=agent_repeated_tool_call_detected action=force_completion tool_name=%s",
                 current_call.get("name"),
+                extra={
+                    "event": "agent_repeated_tool_call_detected",
+                    "action": "force_completion",
+                    "tool_name": current_call.get("name"),
+                },
             )
             return _build_forced_completion_update(current_call)
 
         logger.debug(
-            "Guiding model away from repeated non-mutating tool call tool=%s",
+            "event=agent_repeated_tool_call_detected action=guide_model tool_name=%s",
             current_call.get("name"),
+            extra={
+                "event": "agent_repeated_tool_call_detected",
+                "action": "guide_model",
+                "tool_name": current_call.get("name"),
+            },
         )
         return {"messages": [_build_guidance_tool_message(current_call)]}
 

@@ -1,8 +1,9 @@
 import os
 from uuid import UUID
-from typing import Any
+from typing import Any, Literal
 from datetime import datetime
-from logging import getLogger
+from logging import ERROR, INFO, WARNING, getLogger
+from time import perf_counter
 
 from psycopg import AsyncConnection
 from psycopg.rows import DictRow, dict_row
@@ -37,6 +38,7 @@ PSYCOPG_DB_URL = f"{settings.db.database}://{settings.db.user}:{settings.db.pass
 CONN_MAX_SIZE = 20
 
 logger = getLogger(__name__)
+type AgentRunOutcome = Literal["success", "rejected", "error"]
 
 
 class AgentApplication:
@@ -57,18 +59,14 @@ class AgentApplication:
     async def initialize(self) -> None:
         """Open persistence resources and compile the agent graph once."""
         if self._graph is not None:
-            logger.debug("AgentApplication is already initialized")
             return
         if self._pool is not None:
             raise RuntimeError("AgentApplication initialization is already in progress")
 
-        logger.info("Initializing AgentApplication")
         try:
             self._pool = await self._create_conn_pool()
             self._graph = await self._build_graph()
-            logger.info("AgentApplication initialized")
         except Exception:
-            logger.exception("AgentApplication initialization failed")
             await self.close()
             raise
 
@@ -82,17 +80,28 @@ class AgentApplication:
         plan_progress_callback: AgentPlanProgressCallback | None = None,
     ) -> AgentResult:
         """Run one user message in a chat-bound agent session."""
-        logger.info("Running agent graph for user_id=%s chat_id=%s", user_id, chat_id)
+        started_at = perf_counter()
         normalized_message = self._validate_message(message)
         if isinstance(normalized_message, AgentResult):
-            logger.info(
-                "Agent request rejected before graph invocation user_id=%s chat_id=%s status=%s",
+            _log_agent_run_ended(
                 user_id,
                 chat_id,
-                normalized_message.status,
+                normalized_message,
+                started_at=started_at,
+                outcome="rejected",
+                reason=(
+                    "empty_request"
+                    if normalized_message.status is AgentStatus.NEEDS_CLARIFICATION
+                    else "request_too_long"
+                ),
             )
             return normalized_message
 
+        reason: str | None = None
+        limit: int | None = None
+        error_type: str | None = None
+        outcome: AgentRunOutcome = "success"
+        log_level = INFO
         try:
             graph_result = await self._invoke_graph(
                 normalized_message,
@@ -102,67 +111,74 @@ class AgentApplication:
                 tag_service=tag_service,
                 plan_progress_callback=plan_progress_callback,
             )
-            result = self._to_agent_result(graph_result)
-            logger.info(
-                "Agent graph completed user_id=%s chat_id=%s status=%s",
-                user_id,
-                chat_id,
-                result.status,
-            )
-            return result
+            result, reason = self._to_agent_result(graph_result)
+            if reason is not None:
+                outcome = "rejected"
+                log_level = WARNING
         except PlannerResultError:
-            logger.exception(
-                "Agent planner returned invalid results user_id=%s chat_id=%s",
-                user_id,
-                chat_id,
-            )
-            return _planner_failure_result()
+            result = _planner_failure_result()
+            reason = "invalid_planner_result"
+            outcome = "rejected"
+            log_level = WARNING
         except GraphRecursionError:
-            logger.exception(
-                "Agent graph reached recursion limit user_id=%s chat_id=%s limit=%s",
-                user_id,
-                chat_id,
-                settings.agent.max_iterations,
-            )
-            return AgentResult(
+            result = AgentResult(
                 status=AgentStatus.REJECTED,
                 message=(
                     "I could not complete the request because the agent reached its execution "
                     "limit. Please narrow the request or try again."
                 ),
             )
+            reason = "recursion_limit_reached"
+            limit = settings.agent.max_iterations
+            outcome = "rejected"
+            log_level = WARNING
         except ToolCallLimitExceededError:
-            logger.warning(
-                "Agent tool call limit reached user_id=%s chat_id=%s limit=%s",
-                user_id,
-                chat_id,
-                settings.agent.max_tool_calls,
-            )
-            return AgentResult(
+            result = AgentResult(
                 status=AgentStatus.REJECTED,
                 message=(
                     "I could not complete the request within the tool-call limit. "
                     "Please narrow the request or try again."
                 ),
             )
-        except APIConnectionError:
-            logger.exception(
-                "Agent model connection failed user_id=%s chat_id=%s",
-                user_id,
-                chat_id,
-            )
-            return AgentResult(
+            reason = "tool_call_limit_reached"
+            limit = settings.agent.max_tool_calls
+            outcome = "rejected"
+            log_level = WARNING
+        except APIConnectionError as exc:
+            result = AgentResult(
                 status=AgentStatus.REJECTED,
                 message="The model endpoint is unavailable. Try again later.",
             )
-        except Exception:
-            logger.exception("Agent graph failed user_id=%s chat_id=%s", user_id, chat_id)
-            raise
+            reason = "model_connection_failed"
+            error_type = type(exc).__name__
+            outcome = "error"
+            log_level = ERROR
+
+        _log_agent_run_ended(
+            user_id,
+            chat_id,
+            result,
+            started_at=started_at,
+            outcome=outcome,
+            reason=reason,
+            limit=limit,
+            error_type=error_type,
+            level=log_level,
+        )
+        return result
 
     async def reset_chat_checkpoint(self, chat_id: UUID) -> None:
         """Delete stored agent graph state for one chat session."""
         await self._get_checkpointer().adelete_thread(str(chat_id))
-        logger.info("Agent checkpoint reset for chat_id=%s", chat_id)
+        logger.info(
+            "event=agent_checkpoint_reset chat_id=%s outcome=success",
+            chat_id,
+            extra={
+                "event": "agent_checkpoint_reset",
+                "chat_id": str(chat_id),
+                "outcome": "success",
+            },
+        )
 
     async def close(self) -> None:
         """Release graph persistence resources owned by this application."""
@@ -172,24 +188,18 @@ class AgentApplication:
         self._checkpointer = None
 
         if pool is not None:
-            logger.info("Closing AgentApplication connection pool")
             await pool.close()
-            logger.info("AgentApplication connection pool closed")
 
     async def _build_graph(self) -> AgentGraph:
-        logger.debug("Building agent graph")
         checkpointer = await self._create_checkpointer()
         store = await self._create_store()
         self._checkpointer = checkpointer
-        graph = build_agent_graph(checkpointer=checkpointer, store=store)
-        logger.debug("Agent graph built")
-        return graph
+        return build_agent_graph(checkpointer=checkpointer, store=store)
 
     async def _create_conn_pool(self) -> AsyncConnectionPool[AsyncConnection[DictRow]]:
         if self._pool is not None:
             raise RuntimeError("AgentApplication connection pool is already created")
 
-        logger.debug("Opening AgentApplication connection pool")
         pool: AsyncConnectionPool[AsyncConnection[DictRow]] = AsyncConnectionPool(
             conninfo=self.db_url,
             max_size=self.max_size,
@@ -200,25 +210,20 @@ class AgentApplication:
             },
         )
         await pool.open()
-        logger.debug("AgentApplication connection pool opened")
         return pool
 
     async def _create_checkpointer(self) -> AsyncPostgresSaver:
         pool = self._get_pool()
-        logger.debug("Initializing agent checkpointer")
         checkpointer = AsyncPostgresSaver(pool, serde=_create_checkpoint_serializer())
         # LangGraph owns this schema and may change it between package versions.
         await checkpointer.setup()
-        logger.debug("Agent checkpointer initialized")
         return checkpointer
 
     async def _create_store(self) -> AsyncPostgresStore:
         pool = self._get_pool()
-        logger.debug("Initializing agent store")
         store = AsyncPostgresStore(pool)
         # LangGraph owns this schema and may change it between package versions.
         await store.setup()
-        logger.debug("Agent store initialized")
         return store
 
     def _validate_message(self, message: str) -> str | AgentResult:
@@ -279,15 +284,17 @@ class AgentApplication:
             ),
         }
 
-    def _to_agent_result(self, graph_result: dict[str, Any]) -> AgentResult:
+    def _to_agent_result(self, graph_result: dict[str, Any]) -> tuple[AgentResult, str | None]:
         structured_response = graph_result.get("structured_response")
         if isinstance(structured_response, AgentResult):
-            return structured_response
+            return structured_response, None
 
-        logger.debug("Agent graph did not return structured response")
-        return AgentResult(
-            status=AgentStatus.REJECTED,
-            message="The agent did not produce a valid structured response.",
+        return (
+            AgentResult(
+                status=AgentStatus.REJECTED,
+                message="The agent did not produce a valid structured response.",
+            ),
+            "invalid_structured_response",
         )
 
     def _get_graph(self) -> AgentGraph:
@@ -314,6 +321,45 @@ def _planner_failure_result() -> AgentResult:
             "Try again."
         ),
     )
+
+
+def _log_agent_run_ended(
+    user_id: UUID,
+    chat_id: UUID,
+    result: AgentResult,
+    *,
+    started_at: float,
+    outcome: AgentRunOutcome = "success",
+    reason: str | None = None,
+    limit: int | None = None,
+    error_type: str | None = None,
+    level: int = INFO,
+) -> None:
+    duration_ms = _elapsed_ms(started_at)
+    fields: dict[str, object] = {
+        "event": "agent_run_ended",
+        "user_id": str(user_id),
+        "chat_id": str(chat_id),
+        "outcome": outcome,
+        "status": result.status.value,
+        "duration_ms": duration_ms,
+    }
+    fields.update(
+        {
+            name: value
+            for name, value in (
+                ("reason", reason),
+                ("limit", limit),
+                ("error_type", error_type),
+            )
+            if value is not None
+        }
+    )
+    logger.log(level, "event=agent_run_ended", extra=fields)
+
+
+def _elapsed_ms(started_at: float) -> float:
+    return round((perf_counter() - started_at) * 1_000, 3)
 
 
 def _message_with_runtime_context(message: str) -> str:

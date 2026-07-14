@@ -38,7 +38,14 @@ class PlannerHistorySummarizationNode:
             runtime,
         )
         if _summary_generation_failed(update):
-            logger.warning("Planner history summarization failed; preserving existing history")
+            logger.warning(
+                "event=agent_history_summarization_completed outcome=error action=preserve_history",
+                extra={
+                    "event": "agent_history_summarization_completed",
+                    "outcome": "error",
+                    "action": "preserve_history",
+                },
+            )
             return {}
 
         return update or {}
