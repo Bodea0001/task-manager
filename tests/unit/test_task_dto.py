@@ -3,7 +3,14 @@ from uuid import uuid4
 
 import pytest
 
-from domain.value_objects.tasks import RecurrenceFrequency, Schedule, TaskPriority, TaskStatus
+from domain.value_objects.tasks import (
+    Weekday,
+    Schedule,
+    TaskPriority,
+    TaskStatus,
+    RecurrenceFrequency,
+    RecurrenceMonthRule,
+)
 from dto.tasks import (
     AddTask,
     AddTaskRecurrence,
@@ -158,15 +165,15 @@ def test_empty_task_update_is_rejected() -> None:
         UpdateTaskData()
 
 
-def test_task_recurrence_accepts_schedule_and_frequency() -> None:
+def test_task_recurrence_accepts_explicit_timing_and_weekdays() -> None:
     # Arrange
     starts_at = datetime(2026, 5, 5, 10, 0)
-    ends_at = starts_at + timedelta(hours=1)
-
-    # Act
     recurrence = AddTaskRecurrence(
         frequency=RecurrenceFrequency.WEEKLY,
-        schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+        anchor_date=starts_at.date(),
+        default_time=starts_at.time(),
+        default_duration=timedelta(hours=1),
+        weekdays=(Weekday.TUESDAY, Weekday.THURSDAY),
         interval=2,
         occurrences_limit=5,
     )
@@ -174,6 +181,10 @@ def test_task_recurrence_accepts_schedule_and_frequency() -> None:
     # Assert
     assert recurrence.frequency == RecurrenceFrequency.WEEKLY
     assert recurrence.interval == 2
+    assert recurrence.weekdays == (Weekday.TUESDAY, Weekday.THURSDAY)
+    assert recurrence.anchor_date == starts_at.date()
+    assert recurrence.default_time == starts_at.time()
+    assert recurrence.default_duration == timedelta(hours=1)
     assert recurrence.occurrences_limit == 5
 
 
@@ -186,7 +197,9 @@ def test_task_recurrence_template_accepts_rules() -> None:
     starts_at = datetime(2026, 5, 5, 10, 0)
     recurrence = AddTaskRecurrence(
         frequency=RecurrenceFrequency.MONTHLY,
-        schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+        anchor_date=starts_at.date(),
+        default_time=starts_at.time(),
+        month_rule=RecurrenceMonthRule(month_day=starts_at.day),
     )
 
     template = AddTaskRecurrenceTemplate(title="Pay rent", rules=(recurrence,))
@@ -199,7 +212,9 @@ def test_task_recurrence_template_accepts_tag_ids() -> None:
     tag_id = uuid4()
     recurrence = AddTaskRecurrence(
         frequency=RecurrenceFrequency.MONTHLY,
-        schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+        anchor_date=starts_at.date(),
+        default_time=starts_at.time(),
+        month_rule=RecurrenceMonthRule(month_day=starts_at.day),
     )
 
     template = AddTaskRecurrenceTemplate(
@@ -223,10 +238,11 @@ def test_recurrence_template_filters_accept_tag_ids() -> None:
     "kwargs",
     [
         {"interval": 0},
+        {"default_duration": timedelta(0)},
         {"occurrences_limit": 0},
-        {"repeat_until": datetime(2026, 5, 5, 9, 0)},
+        {"repeat_until": datetime(2026, 5, 4).date()},
         {
-            "repeat_until": datetime(2026, 5, 6, 10, 0),
+            "repeat_until": datetime(2026, 5, 6).date(),
             "occurrences_limit": 5,
         },
     ],
@@ -234,13 +250,11 @@ def test_recurrence_template_filters_accept_tag_ids() -> None:
 def test_task_recurrence_with_invalid_rule_is_rejected(kwargs: dict) -> None:
     # Arrange
     starts_at = datetime(2026, 5, 5, 10, 0)
-    ends_at = starts_at + timedelta(hours=1)
-
-    # Act, Assert
     with pytest.raises(ValueError):
         AddTaskRecurrence(
             frequency=RecurrenceFrequency.DAILY,
-            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+            anchor_date=starts_at.date(),
+            default_time=starts_at.time(),
             **kwargs,
         )
 
@@ -249,22 +263,21 @@ def test_task_recurrence_with_invalid_rule_is_rejected(kwargs: dict) -> None:
     "kwargs",
     [
         {
-            "repeat_until": datetime(2026, 5, 6, 10, 0),
+            "repeat_until": datetime(2026, 5, 6).date(),
             "occurrences_limit": 5,
         },
-        {"repeat_until": datetime(2026, 5, 5, 9, 0)},
+        {"repeat_until": datetime(2026, 5, 4).date()},
+        {"default_duration": timedelta(0)},
         {"occurrences_limit": 0},
     ],
 )
 def test_task_recurrence_update_with_invalid_rule_is_rejected(kwargs: dict) -> None:
     # Arrange
     starts_at = datetime(2026, 5, 5, 10, 0)
-    ends_at = starts_at + timedelta(hours=1)
-
-    # Act, Assert
     with pytest.raises(ValueError):
         UpdateTaskRecurrence(
-            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+            anchor_date=starts_at.date(),
+            default_time=starts_at.time(),
             **kwargs,
         )
 
@@ -274,17 +287,17 @@ def test_task_recurrence_update_with_invalid_rule_is_rejected(kwargs: dict) -> N
     [
         {"frequency": RecurrenceFrequency.DAILY},
         {"interval": 2},
+        {"weekdays": (Weekday.MONDAY,)},
+        {"month_rule": RecurrenceMonthRule(month_day=5)},
     ],
 )
-def test_task_recurrence_update_cannot_change_frequency_or_interval(kwargs: dict) -> None:
+def test_task_recurrence_update_rejects_immutable_rule_fields(kwargs: dict) -> None:
     # Arrange
     starts_at = datetime(2026, 5, 5, 10, 0)
-    ends_at = starts_at + timedelta(hours=1)
-
-    # Act, Assert
     with pytest.raises(TypeError):
         UpdateTaskRecurrence(
-            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
+            anchor_date=starts_at.date(),
+            default_time=starts_at.time(),
             **kwargs,
         )
 

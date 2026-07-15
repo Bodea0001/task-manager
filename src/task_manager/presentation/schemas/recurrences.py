@@ -1,6 +1,6 @@
 from typing import Self
 from uuid import UUID
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, NaiveDatetime, model_validator
 
@@ -13,24 +13,57 @@ from dto.tasks import (
 )
 from domain.value_objects.tasks import (
     RecurrenceFrequency,
+    RecurrenceMonthRule,
+    RecurrenceBusinessDayPolicy,
     Schedule,
     TaskOccurrence,
     TaskPriority,
     TaskRecurrence,
     TaskRecurrenceTemplate,
     TaskStatus,
+    Weekday,
 )
 from presentation.schemas.tags import TagResponse
 from presentation.schemas.tasks import ScheduleSchema
+
+
+class RecurrenceMonthRuleSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    month_day: int | None = Field(default=None, ge=1, le=31)
+    week_of_month: int | None = None
+    weekday: Weekday | None = None
+    business_day_policy: RecurrenceBusinessDayPolicy = RecurrenceBusinessDayPolicy.NONE
+
+    def to_domain(self) -> RecurrenceMonthRule:
+        return RecurrenceMonthRule(
+            month_day=self.month_day,
+            week_of_month=self.week_of_month,
+            weekday=self.weekday,
+            business_day_policy=self.business_day_policy,
+        )
+
+    @classmethod
+    def from_domain(cls, rule: RecurrenceMonthRule) -> "RecurrenceMonthRuleSchema":
+        return cls(
+            month_day=rule.month_day,
+            week_of_month=rule.week_of_month,
+            weekday=rule.weekday,
+            business_day_policy=rule.business_day_policy,
+        )
 
 
 class CreateRecurrenceRuleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     frequency: RecurrenceFrequency
-    schedule: ScheduleSchema
+    anchor_date: date
+    default_time: time
     interval: int = Field(default=1, ge=1)
-    repeat_until: NaiveDatetime | None = None
+    default_duration: timedelta | None = None
+    weekdays: tuple[Weekday, ...] = ()
+    month_rule: "RecurrenceMonthRuleSchema | None" = None
+    repeat_until: date | None = None
     occurrences_limit: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
@@ -41,8 +74,12 @@ class CreateRecurrenceRuleRequest(BaseModel):
     def to_dto(self) -> AddTaskRecurrence:
         return AddTaskRecurrence(
             frequency=self.frequency,
-            schedule=self.schedule.to_domain(),
+            anchor_date=self.anchor_date,
+            default_time=self.default_time,
             interval=self.interval,
+            default_duration=self.default_duration,
+            weekdays=self.weekdays,
+            month_rule=self.month_rule.to_domain() if self.month_rule is not None else None,
             repeat_until=self.repeat_until,
             occurrences_limit=self.occurrences_limit,
         )
@@ -75,8 +112,10 @@ class CreateRecurrenceTemplateRequest(BaseModel):
 class UpdateRecurrenceRuleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schedule: ScheduleSchema
-    repeat_until: NaiveDatetime | None = None
+    anchor_date: date
+    default_time: time
+    default_duration: timedelta | None = None
+    repeat_until: date | None = None
     occurrences_limit: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
@@ -86,7 +125,9 @@ class UpdateRecurrenceRuleRequest(BaseModel):
 
     def to_dto(self) -> UpdateTaskRecurrence:
         return UpdateTaskRecurrence(
-            schedule=self.schedule.to_domain(),
+            anchor_date=self.anchor_date,
+            default_time=self.default_time,
+            default_duration=self.default_duration,
             repeat_until=self.repeat_until,
             occurrences_limit=self.occurrences_limit,
         )
@@ -167,8 +208,13 @@ class RecurrenceRuleResponse(BaseModel):
     template_id: UUID
     frequency: RecurrenceFrequency
     interval: int
-    schedule: ScheduleSchema
-    repeat_until: datetime | None
+    anchor_date: date
+    default_time: time
+    default_duration: timedelta | None
+    weekdays: tuple[Weekday, ...]
+    month_rule: "RecurrenceMonthRuleSchema | None"
+    schedule: ScheduleSchema | None
+    repeat_until: date | None
     occurrences_limit: int | None
 
     @classmethod
@@ -178,7 +224,18 @@ class RecurrenceRuleResponse(BaseModel):
             template_id=rule.template_id,
             frequency=rule.frequency,
             interval=rule.interval,
-            schedule=ScheduleSchema.from_domain(rule.schedule),
+            anchor_date=rule.anchor_date,
+            default_time=rule.default_time,
+            default_duration=rule.default_duration,
+            weekdays=rule.weekdays,
+            month_rule=(
+                RecurrenceMonthRuleSchema.from_domain(rule.month_rule)
+                if rule.month_rule is not None
+                else None
+            ),
+            schedule=(
+                ScheduleSchema.from_domain(rule.schedule) if rule.schedule is not None else None
+            ),
             repeat_until=rule.repeat_until,
             occurrences_limit=rule.occurrences_limit,
         )
@@ -241,7 +298,8 @@ class OccurrenceResponse(BaseModel):
     recurrence_id: UUID
     task_id: UUID | None
     original_starts_at: datetime
-    schedule: ScheduleSchema
+    due_at: datetime
+    schedule: ScheduleSchema | None
     is_cancelled: bool
 
     @classmethod
@@ -250,7 +308,12 @@ class OccurrenceResponse(BaseModel):
             recurrence_id=occurrence.recurrence_id,
             task_id=occurrence.task_id,
             original_starts_at=occurrence.original_starts_at,
-            schedule=ScheduleSchema.from_domain(occurrence.schedule),
+            due_at=occurrence.due_at,
+            schedule=(
+                ScheduleSchema.from_domain(occurrence.schedule)
+                if occurrence.schedule is not None
+                else None
+            ),
             is_cancelled=occurrence.is_cancelled,
         )
 

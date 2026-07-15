@@ -32,8 +32,12 @@ class TaskScheduleMixin(TaskRepositoryCommon):
                     least(scheduled_task.ends_at, requested_window.ends_at) AS ends_at
                 FROM requested_window
                 JOIN scheduled_task
-                    ON scheduled_task.starts_at < requested_window.ends_at
-                    AND scheduled_task.ends_at > requested_window.starts_at
+                    ON tsrange(scheduled_task.starts_at, scheduled_task.ends_at, '[)')
+                        && tsrange(
+                            requested_window.starts_at,
+                            requested_window.ends_at,
+                            '[)'
+                        )
                 JOIN task ON task.task_id = scheduled_task.task_id
                 WHERE
                     task.creator_id = :user_id

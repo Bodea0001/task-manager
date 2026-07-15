@@ -2,7 +2,7 @@ from uuid import UUID
 from typing import TYPE_CHECKING
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import Index, ForeignKey, CheckConstraint
+from sqlalchemy import Index, ForeignKey, CheckConstraint, func
 from sqlalchemy.orm import Mapped, relationship, mapped_column
 from sqlalchemy.types import (
     Uuid,
@@ -25,9 +25,7 @@ from domain.value_objects.tasks import (
     TaskPriority,
     RecurrenceEndMode,
     RecurrenceFrequency,
-    RecurrenceSkipPolicy,
     RecurrenceOverrideAction,
-    RecurrenceCalculationMode,
     RecurrenceBusinessDayPolicy,
 )
 
@@ -107,6 +105,11 @@ class ScheduledTask(Base):
             "ends_at >= starts_at",
             "correct_interval",
         ),
+        Index(
+            "ix_scheduled_task_time_range",
+            func.tsrange(starts_at, ends_at, "[)"),
+            postgresql_using="gist",
+        ),
     )
 
 
@@ -168,22 +171,9 @@ class TaskRecurrenceSeries(Base):
         Integer, server_default="1", comment="Шаг частоты: каждые N дней/недель/месяцев"
     )
     anchor_date: Mapped[date] = mapped_column(Date, comment="Дата первого повторения")
-    default_time: Mapped[time | None] = mapped_column(
-        Time, nullable=True, comment="Время экземпляра, если задача запланирована"
-    )
+    default_time: Mapped[time] = mapped_column(Time, comment="Время дедлайна экземпляра")
     default_duration: Mapped[timedelta | None] = mapped_column(
         Interval, nullable=True, comment="Длительность экземпляра с расписанием"
-    )
-    calculation_mode: Mapped[RecurrenceCalculationMode] = mapped_column(
-        Enum(
-            RecurrenceCalculationMode,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
-        comment="От какой даты считать следующий экземпляр",
-    )
-    skip_policy: Mapped[RecurrenceSkipPolicy] = mapped_column(
-        Enum(RecurrenceSkipPolicy, values_callable=lambda enum: [member.value for member in enum]),
-        comment="Что делать с серией при пропуске экземпляра",
     )
     end_mode: Mapped[RecurrenceEndMode] = mapped_column(
         Enum(RecurrenceEndMode, values_callable=lambda enum: [member.value for member in enum]),
@@ -229,7 +219,8 @@ class TaskRecurrenceSeries(Base):
     __table_args__ = (
         CheckConstraint("step > 0", "positive_step"),
         CheckConstraint(
-            "default_duration IS NULL OR default_time IS NOT NULL", "duration_requires_time"
+            "default_duration IS NULL OR default_duration > INTERVAL '0 seconds'",
+            "positive_default_duration",
         ),
         CheckConstraint(
             """
@@ -354,11 +345,11 @@ class TaskRecurrenceInstance(Base):
     )
     sequence_no: Mapped[int] = mapped_column(Integer, comment="Порядковый номер в серии")
     planned_date: Mapped[date] = mapped_column(Date, comment="Плановая дата экземпляра")
-    planned_starts_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=False), nullable=True, comment="Плановое начало, если есть расписание"
+    planned_starts_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=False), nullable=False, comment="Исходные плановые дата и время"
     )
-    planned_ends_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=False), nullable=True, comment="Плановое окончание, если есть расписание"
+    planned_ends_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=False), nullable=False, comment="Плановый дедлайн экземпляра"
     )
     is_customized: Mapped[bool] = mapped_column(
         server_default="false", comment="Экземпляр изменен отдельно от серии"
@@ -375,11 +366,7 @@ class TaskRecurrenceInstance(Base):
     __table_args__ = (
         CheckConstraint(
             """
-            (
-                planned_starts_at IS NULL
-                AND planned_ends_at IS NULL
-            )
-            OR planned_ends_at >= planned_starts_at
+            planned_ends_at >= planned_starts_at
             """,
             "valid_planned_interval",
         ),

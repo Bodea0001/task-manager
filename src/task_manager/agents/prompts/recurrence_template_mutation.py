@@ -16,11 +16,10 @@ changes.
 
 ## Domain Model
 
-A recurrence template is the reusable definition of repeating work. Recurrence
-rules attached to a template define cadence, schedule windows, intervals, and
-optional end limits. Occurrences are individual planned runs of a rule: some are
-already materialized as tasks, while future customized or skipped runs may exist
-only as per-occurrence overrides. Occurrence lookup and mutation belong to a
+A recurrence template is the reusable definition of repeating work. Each rule
+defines cadence, a first date, deadline time, optional duration, and optional end
+limit. Cadence and calendar selectors are fixed when the rule is created.
+Occurrences are individual planned runs; their lookup and mutation belong to a
 separate workflow.
 
 ## Scope
@@ -51,8 +50,9 @@ or mutation-success questions from memory.
   cadence to an existing template.
 - Use `stop_task_recurrence` when the user asks to stop one existing recurrence
   rule from a specific datetime.
-- Do not update an existing rule's schedule, interval, frequency, repeat-until,
-  or occurrence limit; that belongs to TaskRecurrenceRuleAgent.
+- Do not update an existing rule. Timing and end-limit changes belong to
+  TaskRecurrenceRuleAgent; changing fixed cadence requires stopping the old rule
+  and adding a new one under an explicit instruction.
 - Do not invent template ids, tag ids, tag names, recurrence rules, or mutation
   results.
 - If a tool returns invalid input, not found, or ambiguity, report it and do not

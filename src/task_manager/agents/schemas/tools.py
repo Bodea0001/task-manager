@@ -1,13 +1,20 @@
 from uuid import UUID
 from typing import Annotated
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, NaiveDatetime, field_validator
 from langchain.tools import ToolRuntime, InjectedToolArg
 from pydantic.json_schema import SkipJsonSchema
 
 from agents.schemas.context import AgentContext
-from domain.value_objects.tasks import RecurrenceFrequency, Schedule, TaskPriority, TaskStatus
+from domain.value_objects.tasks import (
+    Weekday,
+    Schedule,
+    TaskPriority,
+    TaskStatus,
+    RecurrenceFrequency,
+    RecurrenceBusinessDayPolicy,
+)
 
 
 InjectedRuntime = Annotated[ToolRuntime[AgentContext], InjectedToolArg]
@@ -332,15 +339,37 @@ class RecurrenceTemplateTagInput(TemplateIdToolInput):
     tag_id: UUID = Field(description="Exact tag id for this operation.")
 
 
-class AddTaskRecurrenceData(BaseModel):
+class RecurrenceMonthRuleData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    month_day: int | None = Field(default=None, ge=1, le=31)
+    week_of_month: int | None = Field(default=None, description="Ordinal week, or -1 for last.")
+    weekday: Weekday | None = None
+    business_day_policy: RecurrenceBusinessDayPolicy = RecurrenceBusinessDayPolicy.NONE
+
+
+class RecurrenceRuleData(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     frequency: RecurrenceFrequency = Field(description="Recurrence frequency.")
-    schedule: Schedule = Field(description="Recurrence schedule without timezone offsets.")
+    anchor_date: date = Field(description="Date of the first occurrence.")
+    default_time: time = Field(description="Deadline time used for every occurrence.")
     interval: int = Field(default=1, ge=1, description="Positive recurrence interval.")
-    repeat_until: NaiveDatetime | None = Field(
+    default_duration: timedelta | None = Field(
         default=None,
-        description="Optional recurrence end datetime without timezone offset.",
+        description="Optional positive duration. Omit it to create deadline-only tasks.",
+    )
+    weekdays: tuple[Weekday, ...] = Field(
+        default=(),
+        description="Weekdays for a weekly rule.",
+    )
+    month_rule: RecurrenceMonthRuleData | None = Field(
+        default=None,
+        description="Calendar selector for a monthly rule.",
+    )
+    repeat_until: date | None = Field(
+        default=None,
+        description="Optional inclusive final occurrence date.",
     )
     occurrences_limit: int | None = Field(
         default=None,
@@ -348,10 +377,16 @@ class AddTaskRecurrenceData(BaseModel):
         description="Optional positive occurrence count limit.",
     )
 
-    @field_validator("schedule")
+    @field_validator("default_time")
     @classmethod
-    def validate_schedule_datetimes_are_naive(cls, schedule: Schedule) -> Schedule:
-        return _validate_schedule_is_naive(schedule)
+    def validate_default_time_is_naive(cls, value: time) -> time:
+        if value.tzinfo is not None:
+            raise ValueError("default_time must not include a timezone offset")
+        return value
+
+
+class AddTaskRecurrenceData(RecurrenceRuleData):
+    pass
 
 
 class AddTaskRecurrenceTemplateInput(AgentToolInput):
@@ -366,42 +401,33 @@ class GetTaskRecurrenceRulesInput(TemplateIdToolInput):
     pass
 
 
-class AddTaskRecurrenceRuleInput(TemplateIdToolInput):
-    frequency: RecurrenceFrequency = Field(description="Recurrence frequency.")
-    schedule: Schedule = Field(description="Recurrence schedule without timezone offsets.")
-    interval: int = Field(default=1, ge=1, description="Positive recurrence interval.")
-    repeat_until: NaiveDatetime | None = Field(
-        default=None,
-        description="Optional recurrence end datetime without timezone offset.",
-    )
-    occurrences_limit: int | None = Field(
-        default=None,
-        ge=1,
-        description="Optional positive occurrence count limit.",
-    )
-
-    @field_validator("schedule")
-    @classmethod
-    def validate_schedule_datetimes_are_naive(cls, schedule: Schedule) -> Schedule:
-        return _validate_schedule_is_naive(schedule)
+class AddTaskRecurrenceRuleInput(TemplateIdToolInput, RecurrenceRuleData):
+    pass
 
 
 class UpdateTaskRecurrenceInput(RecurrenceIdToolInput):
-    schedule: Schedule = Field(description="Updated recurrence schedule without timezone offsets.")
-    repeat_until: NaiveDatetime | None = Field(
+    anchor_date: date = Field(description="Updated date of the first occurrence.")
+    default_time: time = Field(description="Updated deadline time for each occurrence.")
+    default_duration: timedelta | None = Field(
         default=None,
-        description="Optional recurrence end datetime without timezone offset.",
+        description="Updated duration, or null to remove schedules from future occurrences.",
+    )
+    repeat_until: date | None = Field(
+        default=None,
+        description="Updated inclusive final occurrence date.",
     )
     occurrences_limit: int | None = Field(
         default=None,
         ge=1,
-        description="Optional positive occurrence count limit.",
+        description="Updated occurrence limit.",
     )
 
-    @field_validator("schedule")
+    @field_validator("default_time")
     @classmethod
-    def validate_schedule_datetimes_are_naive(cls, schedule: Schedule) -> Schedule:
-        return _validate_schedule_is_naive(schedule)
+    def validate_default_time_is_naive(cls, value: time) -> time:
+        if value.tzinfo is not None:
+            raise ValueError("default_time must not include a timezone offset")
+        return value
 
 
 class StopTaskRecurrenceInput(RecurrenceIdToolInput):

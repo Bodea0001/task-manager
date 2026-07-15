@@ -8,7 +8,7 @@ from helpers import create_tag, create_task
 from constants import TEST_TAG_PREFIX, TEST_USER_ID
 
 from domain.value_objects.tags import Tag
-from domain.value_objects.tasks import RecurrenceFrequency, Schedule
+from domain.value_objects.tasks import RecurrenceFrequency
 from dto.tasks import AddTaskRecurrence, AddTaskRecurrenceTemplate
 from services.tags import TagService
 from services.tasks import TaskService
@@ -163,7 +163,8 @@ async def test_deleting_tag_removes_task_and_recurrence_template_links(
             rules=(
                 AddTaskRecurrence(
                     frequency=RecurrenceFrequency.DAILY,
-                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at),
+                    anchor_date=starts_at.date(),
+                    default_time=starts_at.time(),
                     occurrences_limit=1,
                 ),
             ),

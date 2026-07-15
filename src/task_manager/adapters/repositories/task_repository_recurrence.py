@@ -7,16 +7,17 @@ from sqlalchemy import (
     func,
     cast as sql_cast,
     select,
+    union_all,
     insert,
     update,
-    delete,
     literal,
     bindparam,
 )
-from sqlalchemy.types import Uuid, Integer, TIMESTAMP
+from sqlalchemy.types import Uuid, TIMESTAMP
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.selectable import CTE
-from sqlalchemy.dialects.postgresql import ARRAY, insert as pg_insert
+from sqlalchemy.orm import selectinload
+from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by, insert as pg_insert
 
 import exceptions as app_exc
 from config import settings
@@ -42,10 +43,7 @@ from domain.value_objects.tasks import (
     TaskStatus,
     TaskRecurrence,
     RecurrenceEndMode,
-    RecurrenceFrequency,
-    RecurrenceSkipPolicy,
     TaskRecurrenceTemplate,
-    RecurrenceCalculationMode,
     RecurrenceBusinessDayPolicy,
 )
 from adapters.repositories.task_repository_common import (
@@ -107,119 +105,30 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     task_recurrence_series.default_duration,
                     task_recurrence_series.repeat_until,
                     task_recurrence_series.max_occurrences,
+                    ARRAY(
+                        SELECT task_recurrence_weekday.weekday::smallint
+                        FROM task_recurrence_weekday
+                        WHERE
+                            task_recurrence_weekday.series_id
+                                = task_recurrence_series.series_id
+                        ORDER BY task_recurrence_weekday.weekday
+                    )::smallint[] AS weekdays,
+                    task_recurrence_month_rule.month_day,
+                    task_recurrence_month_rule.week_of_month,
+                    task_recurrence_month_rule.weekday AS month_weekday,
+                    task_recurrence_month_rule.business_day_policy::varchar
+                        AS business_day_policy,
                     task_recurrence_template.title,
                     task_recurrence_template.description,
                     task_recurrence_template.priority,
                     task_recurrence_template.creator_id,
                     requested_window.starts_on,
-                    requested_window.ends_on,
-                    greatest(
-                        1,
-                        CASE task_recurrence_series.frequency::varchar
-                            WHEN 'daily' THEN (
-                                ((requested_window.starts_on
-                                    - task_recurrence_series.anchor_date)
-                                    / task_recurrence_series.step)
-                                + 1
-                            )
-                            WHEN 'weekly' THEN (
-                                ((requested_window.starts_on
-                                    - task_recurrence_series.anchor_date)
-                                    / (7 * task_recurrence_series.step))
-                                + 1
-                            )
-                            ELSE (
-                                (
-                                    (
-                                        (date_part('year', requested_window.starts_on)::int
-                                            - date_part(
-                                                'year',
-                                                task_recurrence_series.anchor_date
-                                            )::int
-                                        ) * 12
-                                    )
-                                    + date_part('month', requested_window.starts_on)::int
-                                    - date_part(
-                                        'month',
-                                        task_recurrence_series.anchor_date
-                                    )::int
-                                ) / task_recurrence_series.step
-                            ) + 1
-                        END
-                    )::int AS first_sequence_no,
-                    least(
-                        COALESCE(task_recurrence_series.max_occurrences, 2147483647),
-                        greatest(
-                            1,
-                            CASE task_recurrence_series.frequency::varchar
-                                WHEN 'daily' THEN (
-                                    (
-                                        least(
-                                            requested_window.ends_on,
-                                            COALESCE(
-                                                task_recurrence_series.repeat_until,
-                                                requested_window.ends_on
-                                            )
-                                        )
-                                        - task_recurrence_series.anchor_date
-                                    )
-                                    / task_recurrence_series.step
-                                ) + 1
-                                WHEN 'weekly' THEN (
-                                    (
-                                        least(
-                                            requested_window.ends_on,
-                                            COALESCE(
-                                                task_recurrence_series.repeat_until,
-                                                requested_window.ends_on
-                                            )
-                                        )
-                                        - task_recurrence_series.anchor_date
-                                    )
-                                    / (7 * task_recurrence_series.step)
-                                ) + 1
-                                ELSE (
-                                    (
-                                        (
-                                            (
-                                                date_part(
-                                                    'year',
-                                                    least(
-                                                        requested_window.ends_on,
-                                                        COALESCE(
-                                                            task_recurrence_series.repeat_until,
-                                                            requested_window.ends_on
-                                                        )
-                                                    )
-                                                )::int
-                                                - date_part(
-                                                    'year',
-                                                    task_recurrence_series.anchor_date
-                                                )::int
-                                            ) * 12
-                                        )
-                                        + date_part(
-                                            'month',
-                                            least(
-                                                requested_window.ends_on,
-                                                COALESCE(
-                                                    task_recurrence_series.repeat_until,
-                                                    requested_window.ends_on
-                                                )
-                                            )
-                                        )::int
-                                        - date_part(
-                                            'month',
-                                            task_recurrence_series.anchor_date
-                                        )::int
-                                    ) / task_recurrence_series.step
-                                ) + 1
-                            END
-                        )
-                    )::int AS last_sequence_no
+                    requested_window.ends_on
                 FROM task_recurrence_series
                 JOIN task_recurrence_template
                     ON task_recurrence_template.template_id = task_recurrence_series.template_id
+                LEFT JOIN task_recurrence_month_rule
+                    ON task_recurrence_month_rule.series_id = task_recurrence_series.series_id
                 JOIN requested_window
                     ON requested_window.frequency = task_recurrence_series.frequency::varchar
                     AND requested_window.ends_on >= task_recurrence_series.anchor_date
@@ -246,46 +155,35 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     occurrence.planned_date,
                     COALESCE(
                         occurrence_override.override_starts_at,
-                        occurrence.planned_date::timestamp
-                        + COALESCE(series_window.default_time, TIME '00:00')
+                        occurrence.planned_date::timestamp + series_window.default_time
                     ) AS planned_starts_at,
                     COALESCE(
                         occurrence_override.override_ends_at,
                         occurrence.planned_date::timestamp
-                        + COALESCE(series_window.default_time, TIME '00:00')
+                        + series_window.default_time
                         + COALESCE(series_window.default_duration, INTERVAL '0 seconds')
                     ) AS planned_ends_at,
+                    series_window.default_duration IS NOT NULL AS has_schedule,
                     series_window.ends_on
                 FROM series_window
-                CROSS JOIN LATERAL (
-                    SELECT
-                        sequence_no,
-                        CASE series_window.frequency
-                            WHEN 'daily' THEN (
-                                series_window.anchor_date
-                                + ((sequence_no - 1) * series_window.step)
-                            )
-                            WHEN 'weekly' THEN (
-                                series_window.anchor_date
-                                + ((sequence_no - 1) * series_window.step * 7)
-                            )
-                            ELSE (
-                                series_window.anchor_date
-                                + make_interval(
-                                    months => ((sequence_no - 1) * series_window.step)::int
-                                )
-                            )::date
-                        END AS planned_date
-                    FROM generate_series(
-                        series_window.first_sequence_no,
-                        series_window.last_sequence_no
-                    ) AS generated(sequence_no)
+                CROSS JOIN LATERAL generate_task_recurrence_dates(
+                    series_window.frequency,
+                    series_window.step,
+                    series_window.anchor_date,
+                    series_window.weekdays,
+                    series_window.month_day,
+                    series_window.week_of_month,
+                    series_window.month_weekday,
+                    series_window.business_day_policy,
+                    series_window.starts_on,
+                    series_window.ends_on,
+                    series_window.repeat_until,
+                    series_window.max_occurrences
                 ) AS occurrence
                 LEFT JOIN task_recurrence_instance_override AS occurrence_override
                     ON occurrence_override.series_id = series_window.series_id
                     AND occurrence_override.planned_starts_at = (
-                        occurrence.planned_date::timestamp
-                        + COALESCE(series_window.default_time, TIME '00:00')
+                        occurrence.planned_date::timestamp + series_window.default_time
                     )
                     AND occurrence_override.deleted_at IS NULL
                 WHERE
@@ -294,10 +192,6 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     AND (
                         occurrence_override.action IS NULL
                         OR occurrence_override.action NOT IN ('skip', 'delete')
-                    )
-                    AND (
-                        series_window.repeat_until IS NULL
-                        OR occurrence.planned_date <= series_window.repeat_until
                     )
                     AND NOT EXISTS (
                         SELECT 1
@@ -309,21 +203,44 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 )
                 ORDER BY series_id, sequence_no, ends_on DESC
             ),
+            blocking_schedule AS MATERIALIZED (
+                SELECT scheduled_task.starts_at, scheduled_task.ends_at
+                FROM scheduled_task
+                JOIN task ON task.task_id = scheduled_task.task_id
+                WHERE
+                    task.creator_id = :user_id
+                    AND task.deleted_at IS NULL
+                    AND task.status != 'cancelled'
+                    AND tsrange(
+                        scheduled_task.starts_at,
+                        scheduled_task.ends_at,
+                        '[)'
+                    ) && tsrange(
+                        (SELECT min(starts_on)::timestamp FROM requested_window),
+                        (
+                            SELECT (max(ends_on) + 1)::timestamp
+                            FROM requested_window
+                        ),
+                        '[)'
+                    )
+            ),
+            schedule_conflict AS MATERIALIZED (
+                SELECT DISTINCT candidate.series_id, candidate.sequence_no
+                FROM candidate
+                JOIN blocking_schedule
+                    ON blocking_schedule.starts_at < candidate.planned_ends_at
+                    AND blocking_schedule.ends_at > candidate.planned_starts_at
+                WHERE
+                    candidate.has_schedule
+            ),
             conflict_candidate AS MATERIALIZED (
                 SELECT
                     candidate.*,
-                    EXISTS (
-                        SELECT 1
-                        FROM scheduled_task
-                        JOIN task ON task.task_id = scheduled_task.task_id
-                        WHERE
-                            task.creator_id = candidate.creator_id
-                            AND task.deleted_at IS NULL
-                            AND task.status != 'cancelled'
-                            AND scheduled_task.starts_at < candidate.planned_ends_at
-                            AND scheduled_task.ends_at > candidate.planned_starts_at
-                    ) AS has_schedule_conflict
+                    schedule_conflict.series_id IS NOT NULL AS has_schedule_conflict
                 FROM candidate
+                LEFT JOIN schedule_conflict
+                    ON schedule_conflict.series_id = candidate.series_id
+                    AND schedule_conflict.sequence_no = candidate.sequence_no
             ),
             task_values AS MATERIALIZED (
                 SELECT
@@ -336,7 +253,8 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     conflict_candidate.priority,
                     conflict_candidate.creator_id,
                     conflict_candidate.planned_starts_at,
-                    conflict_candidate.planned_ends_at
+                    conflict_candidate.planned_ends_at,
+                    conflict_candidate.has_schedule
                 FROM conflict_candidate
                 WHERE NOT conflict_candidate.has_schedule_conflict
             ),
@@ -401,6 +319,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     task_values.planned_ends_at
                 FROM task_values
                 JOIN inserted_task ON inserted_task.task_id = task_values.task_id
+                WHERE task_values.has_schedule
                 RETURNING task_id
             ),
             inserted_conflict AS (
@@ -490,19 +409,25 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         stmt = text("""
             WITH rule_input AS MATERIALIZED (
                 SELECT
-                    row_number() OVER () AS rule_index,
+                    uuidv7() AS series_id,
                     rule.frequency,
                     rule.interval,
-                    rule.starts_at,
-                    rule.ends_at,
+                    rule.anchor_date,
+                    rule.default_time,
+                    rule.default_duration_seconds,
+                    rule.weekdays,
+                    rule.month_rule,
                     rule.repeat_until,
                     rule.occurrences_limit
                 FROM jsonb_to_recordset(CAST(:rules AS jsonb)) AS rule(
                     frequency text,
                     interval integer,
-                    starts_at timestamp,
-                    ends_at timestamp,
-                    repeat_until timestamp,
+                    anchor_date date,
+                    default_time time,
+                    default_duration_seconds double precision,
+                    weekdays jsonb,
+                    month_rule jsonb,
+                    repeat_until date,
                     occurrences_limit integer
                 )
             ),
@@ -542,33 +467,34 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             ),
             inserted_series AS (
                 INSERT INTO task_recurrence_series(
+                    series_id,
                     template_id,
                     frequency,
                     step,
                     anchor_date,
                     default_time,
                     default_duration,
-                    calculation_mode,
-                    skip_policy,
                     end_mode,
                     repeat_until,
                     max_occurrences
                 )
                 SELECT
+                    rule_input.series_id,
                     inserted_template.template_id,
                     rule_input.frequency::recurrencefrequency,
                     rule_input.interval,
-                    rule_input.starts_at::date,
-                    rule_input.starts_at::time,
-                    rule_input.ends_at - rule_input.starts_at,
-                    'scheduled_date'::recurrencecalculationmode,
-                    'allow_overdue'::recurrenceskippolicy,
+                    rule_input.anchor_date,
+                    rule_input.default_time,
+                    CASE
+                        WHEN rule_input.default_duration_seconds IS NULL THEN NULL
+                        ELSE make_interval(secs => rule_input.default_duration_seconds)
+                    END,
                     CASE
                         WHEN rule_input.repeat_until IS NOT NULL THEN 'until_date'
                         WHEN rule_input.occurrences_limit IS NOT NULL THEN 'count'
                         ELSE 'never'
                     END::recurrenceendmode,
-                    rule_input.repeat_until::date,
+                    rule_input.repeat_until,
                     rule_input.occurrences_limit
                 FROM rule_input
                 CROSS JOIN inserted_template
@@ -587,8 +513,10 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 INSERT INTO task_recurrence_weekday(series_id, weekday)
                 SELECT
                     inserted_series.series_id,
-                    extract(isodow FROM inserted_series.anchor_date)::int
+                    weekday.value::int
                 FROM inserted_series
+                JOIN rule_input ON rule_input.series_id = inserted_series.series_id
+                CROSS JOIN LATERAL jsonb_array_elements_text(rule_input.weekdays) AS weekday(value)
                 WHERE inserted_series.frequency = 'weekly'
                 ON CONFLICT (series_id, weekday) DO NOTHING
                 RETURNING series_id
@@ -597,38 +525,32 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 INSERT INTO task_recurrence_month_rule(
                     series_id,
                     month_day,
+                    week_of_month,
+                    weekday,
                     business_day_policy
                 )
                 SELECT
                     inserted_series.series_id,
-                    extract(day FROM inserted_series.anchor_date)::int,
-                    'none'::recurrencebusinessdaypolicy
+                    (rule_input.month_rule ->> 'month_day')::int,
+                    (rule_input.month_rule ->> 'week_of_month')::int,
+                    (rule_input.month_rule ->> 'weekday')::int,
+                    COALESCE(
+                        rule_input.month_rule ->> 'business_day_policy',
+                        'none'
+                    )::recurrencebusinessdaypolicy
                 FROM inserted_series
+                JOIN rule_input ON rule_input.series_id = inserted_series.series_id
                 WHERE inserted_series.frequency = 'monthly'
                 ON CONFLICT (series_id) DO NOTHING
                 RETURNING series_id
             )
             SELECT
                 inserted_template.template_id,
-                inserted_template.title,
-                inserted_template.description,
-                inserted_template.priority,
-                inserted_template.created_at,
-                NULL::uuid AS tag_id,
-                NULL::text AS tag_name,
-                NULL::timestamp with time zone AS tag_created_at,
-                inserted_series.series_id,
-                inserted_series.frequency,
-                inserted_series.step,
-                inserted_series.anchor_date,
-                inserted_series.default_time,
-                inserted_series.default_duration,
-                inserted_series.repeat_until,
-                inserted_series.max_occurrences,
-                (SELECT count(*) FROM inserted_template_tag) AS inserted_tag_count
+                (SELECT count(*) FROM inserted_template_tag) AS inserted_tag_count,
+                (SELECT count(*) FROM inserted_series) AS inserted_series_count,
+                (SELECT count(*) FROM inserted_weekday) AS inserted_weekday_count,
+                (SELECT count(*) FROM inserted_month_rule) AS inserted_month_rule_count
             FROM inserted_template
-            JOIN inserted_series ON inserted_series.template_id = inserted_template.template_id
-            ORDER BY inserted_series.anchor_date, inserted_series.default_time
         """).bindparams(bindparam("tag_ids", type_=ARRAY(Uuid())))
         result = await self.session.execute(
             stmt,
@@ -641,13 +563,12 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 "tag_ids": list(tag_ids),
             },
         )
-        rows = result.all()
-        template = self._rows_to_recurrence_template(rows)
+        template_id = result.one().template_id
         await self.materialize_recurrence_instances(
             user_id,
             tuple(self._initial_materialization_window(rule) for rule in data.rules),
         )
-        return await self.get_task_recurrence_template(user_id, template.template_id)
+        return await self.get_task_recurrence_template(user_id, template_id)
 
     async def get_task_recurrence_template(
         self,
@@ -806,20 +727,20 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             self._owned_recurrence_template(user_id, template_id).cte("owner_template"),
             data,
         )
-        inserted_weekday = self._insert_recurrence_weekday_from_series(inserted_series)
-        inserted_month_rule = self._insert_recurrence_month_rule_from_series(inserted_series)
+        inserted_weekday = self._insert_recurrence_weekdays(inserted_series, data)
+        inserted_month_rule = self._insert_recurrence_month_rule(inserted_series, data)
         stmt = (
-            select(*self._recurrence_columns_from(inserted_series))
+            select(inserted_series.c.series_id)
             .add_cte(inserted_weekday)
             .add_cte(inserted_month_rule)
         )
         result = await self.session.execute(stmt)
-        recurrence = self._row_to_recurrence(result.one())
+        recurrence_id = result.scalar_one()
         await self.materialize_recurrence_instances(
             user_id,
             (self._initial_materialization_window(data),),
         )
-        return recurrence
+        return await self._get_recurrence(user_id, recurrence_id)
 
     async def get_task_recurrence_rules(
         self, user_id: UUID, template_id: UUID
@@ -827,6 +748,10 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         await self._raise_if_recurrence_template_does_not_belong_to_user(user_id, template_id)
         stmt = (
             select(TaskRecurrenceSeriesModel)
+            .options(
+                selectinload(TaskRecurrenceSeriesModel.weekdays),
+                selectinload(TaskRecurrenceSeriesModel.month_rule),
+            )
             .join(
                 TaskRecurrenceTemplateModel,
                 TaskRecurrenceTemplateModel.template_id == TaskRecurrenceSeriesModel.template_id,
@@ -926,37 +851,37 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             task_id=None,
             recurrence_id=recurrence_id,
             data=data,
-            frequency=current_recurrence.frequency,
-            interval=current_recurrence.interval,
+            current_recurrence=current_recurrence,
         )
 
         result = await self.session.execute(
             update(TaskRecurrenceSeriesModel)
-            .values(
-                **self._recurrence_update_values(
-                    data,
-                    frequency=current_recurrence.frequency,
-                    interval=current_recurrence.interval,
-                )
-            )
+            .values(**self._recurrence_update_values(data))
             .where(
                 TaskRecurrenceSeriesModel.series_id == recurrence_id,
                 TaskRecurrenceSeriesModel.deleted_at.is_(None),
             )
-            .returning(*self._recurrence_returning_columns())
+            .returning(TaskRecurrenceSeriesModel.series_id)
         )
-        recurrence = self._row_to_recurrence(result.one())
-        await self._replace_recurrence_rule(recurrence_id, data, recurrence.frequency)
+        result.scalar_one()
         await self.recalculate_future_recurrence_instances(
             user_id=user_id,
             recurrence_id=recurrence_id,
-            from_datetime=datetime.combine(data.schedule.starts_at.date(), time.min),
+            from_datetime=min(
+                datetime.combine(current_recurrence.anchor_date, time.min),
+                datetime.combine(data.anchor_date, time.min),
+            ),
         )
         await self.materialize_recurrence_instances(
             user_id,
-            (self._continuing_materialization_window(data, frequency=recurrence.frequency),),
+            (
+                self._continuing_materialization_window(
+                    data,
+                    frequency=current_recurrence.frequency,
+                ),
+            ),
         )
-        return recurrence
+        return await self._get_recurrence(user_id, recurrence_id)
 
     @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def stop_task_recurrence(
@@ -979,14 +904,14 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             )
             .returning(*self._recurrence_returning_columns())
         )
-        row = result.one()
+        result.one()
         await self._set_recurrence_tasks_status_from(
             user_id=user_id,
             recurrence_id=recurrence_id,
             from_datetime=stop_from,
             task_status=TaskStatus.CANCELLED,
         )
-        return self._row_to_recurrence(row)
+        return await self._get_recurrence(user_id, recurrence_id)
 
     @translate_repository_errors(not_found=app_exc.RecurrenceRuleNotFound)
     async def delete_task_recurrence(self, user_id: UUID, recurrence_id: UUID) -> None:
@@ -1050,52 +975,127 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         await self._raise_if_recurrence_does_not_belong_to_user(user_id, recurrence_id)
         await self.session.execute(
             text("""
-                WITH recalculated AS (
+                WITH series_config AS MATERIALIZED (
                     SELECT
-                        task_recurrence_instance.instance_id,
-                        task_recurrence_instance.task_id,
-                        task_recurrence_template.title,
-                        task_recurrence_template.description,
-                        task_recurrence_template.priority,
-                        task_recurrence_instance.sequence_no,
-                        CASE task_recurrence_series.frequency::varchar
-                            WHEN 'daily' THEN (
-                                task_recurrence_series.anchor_date
-                                + ((task_recurrence_instance.sequence_no - 1)
-                                    * task_recurrence_series.step)
-                            )
-                            WHEN 'weekly' THEN (
-                                task_recurrence_series.anchor_date
-                                + ((task_recurrence_instance.sequence_no - 1)
-                                    * task_recurrence_series.step * 7)
-                            )
-                            ELSE (
-                                task_recurrence_series.anchor_date
-                                + make_interval(
-                                    months => (
-                                        (task_recurrence_instance.sequence_no - 1)
-                                        * task_recurrence_series.step
-                                    )::int
-                                )
-                            )::date
-                        END AS planned_date,
+                        task_recurrence_series.series_id,
+                        task_recurrence_series.frequency::varchar AS frequency,
+                        task_recurrence_series.step,
+                        task_recurrence_series.anchor_date,
                         task_recurrence_series.default_time,
                         task_recurrence_series.default_duration,
                         task_recurrence_series.repeat_until,
-                        task_recurrence_series.max_occurrences
-                    FROM task_recurrence_instance
-                    JOIN task_recurrence_series
-                        ON task_recurrence_series.series_id = task_recurrence_instance.series_id
+                        task_recurrence_series.max_occurrences,
+                        ARRAY(
+                            SELECT task_recurrence_weekday.weekday::smallint
+                            FROM task_recurrence_weekday
+                            WHERE
+                                task_recurrence_weekday.series_id
+                                    = task_recurrence_series.series_id
+                            ORDER BY task_recurrence_weekday.weekday
+                        )::smallint[] AS weekdays,
+                        task_recurrence_month_rule.month_day,
+                        task_recurrence_month_rule.week_of_month,
+                        task_recurrence_month_rule.weekday AS month_weekday,
+                        task_recurrence_month_rule.business_day_policy::varchar
+                            AS business_day_policy,
+                        task_recurrence_template.title,
+                        task_recurrence_template.description,
+                        task_recurrence_template.priority,
+                        greatest(
+                            1,
+                            COALESCE((
+                                SELECT max(existing_instance.sequence_no)
+                                FROM task_recurrence_instance AS existing_instance
+                                WHERE
+                                    existing_instance.series_id
+                                        = task_recurrence_series.series_id
+                                    AND existing_instance.deleted_at IS NULL
+                            ), 1)
+                        )::integer AS max_sequence_no
+                    FROM task_recurrence_series
                     JOIN task_recurrence_template
                         ON task_recurrence_template.template_id = task_recurrence_series.template_id
+                    LEFT JOIN task_recurrence_month_rule
+                        ON task_recurrence_month_rule.series_id
+                            = task_recurrence_series.series_id
                     WHERE
                         task_recurrence_template.creator_id = :user_id
                         AND task_recurrence_template.deleted_at IS NULL
                         AND task_recurrence_series.series_id = :recurrence_id
                         AND task_recurrence_series.deleted_at IS NULL
-                        AND task_recurrence_instance.deleted_at IS NULL
+                ),
+                generated_date AS MATERIALIZED (
+                    SELECT occurrence.sequence_no, occurrence.planned_date
+                    FROM series_config
+                    CROSS JOIN LATERAL generate_task_recurrence_dates(
+                        series_config.frequency,
+                        series_config.step,
+                        series_config.anchor_date,
+                        series_config.weekdays,
+                        series_config.month_day,
+                        series_config.week_of_month,
+                        series_config.month_weekday,
+                        series_config.business_day_policy,
+                        series_config.anchor_date,
+                        CASE series_config.frequency
+                            WHEN 'daily' THEN
+                                series_config.anchor_date
+                                + (
+                                    series_config.step * series_config.max_sequence_no
+                                )::integer
+                            WHEN 'weekly' THEN
+                                series_config.anchor_date
+                                + (
+                                    7
+                                    * series_config.step
+                                    * series_config.max_sequence_no
+                                )::integer
+                            ELSE (
+                                series_config.anchor_date
+                                + make_interval(
+                                    months => (
+                                        CASE
+                                            WHEN series_config.week_of_month = 5 THEN 4
+                                            WHEN series_config.month_day >= 29 THEN 2
+                                            ELSE 1
+                                        END
+                                        * series_config.step
+                                        * series_config.max_sequence_no
+                                    )::integer
+                                )
+                            )::date
+                        END,
+                        NULL,
+                        series_config.max_sequence_no
+                    ) AS occurrence
+                ),
+                recalculated AS (
+                    SELECT
+                        task_recurrence_instance.instance_id,
+                        task_recurrence_instance.task_id,
+                        series_config.title,
+                        series_config.description,
+                        series_config.priority,
+                        task_recurrence_instance.sequence_no,
+                        generated_date.planned_date,
+                        series_config.default_time,
+                        series_config.default_duration,
+                        series_config.repeat_until,
+                        series_config.max_occurrences
+                    FROM task_recurrence_instance
+                    JOIN task
+                        ON task.task_id = task_recurrence_instance.task_id
+                    JOIN series_config
+                        ON series_config.series_id = task_recurrence_instance.series_id
+                    JOIN generated_date
+                        ON generated_date.sequence_no
+                            = task_recurrence_instance.sequence_no
+                    WHERE
+                        task_recurrence_instance.deleted_at IS NULL
                         AND task_recurrence_instance.is_customized = false
                         AND task_recurrence_instance.planned_starts_at >= :from_datetime
+                        AND task.deleted_at IS NULL
+                        AND task.status != 'completed'
                 ),
                 planned AS (
                     SELECT
@@ -1107,14 +1107,14 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                         sequence_no,
                         planned_date,
                         (
-                            planned_date::timestamp
-                            + COALESCE(default_time, TIME '00:00')
+                            planned_date::timestamp + default_time
                         ) AS planned_starts_at,
                         (
                             planned_date::timestamp
-                            + COALESCE(default_time, TIME '00:00')
+                            + default_time
                             + COALESCE(default_duration, INTERVAL '0 seconds')
                         ) AS planned_ends_at,
+                        default_duration IS NOT NULL AS has_schedule,
                         (
                             (repeat_until IS NULL OR planned_date <= repeat_until)
                             AND (
@@ -1152,13 +1152,30 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                         task.task_id = planned.task_id
                         AND task.deleted_at IS NULL
                     RETURNING task.task_id
+                ),
+                deleted_schedule AS (
+                    DELETE FROM scheduled_task
+                    USING planned
+                    WHERE
+                        scheduled_task.task_id = planned.task_id
+                        AND NOT planned.has_schedule
+                    RETURNING scheduled_task.task_id
+                ),
+                upserted_schedule AS (
+                    INSERT INTO scheduled_task(task_id, starts_at, ends_at)
+                    SELECT task_id, planned_starts_at, planned_ends_at
+                    FROM planned
+                    WHERE has_schedule
+                    ON CONFLICT (task_id) DO UPDATE SET
+                        starts_at = EXCLUDED.starts_at,
+                        ends_at = EXCLUDED.ends_at
+                    RETURNING task_id
                 )
-                UPDATE scheduled_task
-                SET
-                    starts_at = planned.planned_starts_at,
-                    ends_at = planned.planned_ends_at
-                FROM planned
-                WHERE scheduled_task.task_id = planned.task_id
+                SELECT
+                    (SELECT count(*) FROM updated_instance) AS updated_instance_count,
+                    (SELECT count(*) FROM updated_task) AS updated_task_count,
+                    (SELECT count(*) FROM deleted_schedule) AS deleted_schedule_count,
+                    (SELECT count(*) FROM upserted_schedule) AS upserted_schedule_count
             """),
             {
                 "user_id": user_id,
@@ -1174,45 +1191,101 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         task_id: UUID | None,
         recurrence_id: UUID | None,
         data: AddTaskRecurrence | UpdateTaskRecurrence,
-        frequency: RecurrenceFrequency | None = None,
-        interval: int | None = None,
+        current_recurrence: TaskRecurrence | None = None,
     ) -> None:
+        if data.default_duration is None:
+            return
+
         if isinstance(data, AddTaskRecurrence):
             frequency = data.frequency
             interval = data.interval
-        if frequency is None or interval is None:
-            raise ValueError("recurrence frequency and interval are required")
+            weekdays = data.weekdays
+            month_rule = data.month_rule
+        elif current_recurrence is not None:
+            frequency = current_recurrence.frequency
+            interval = current_recurrence.interval
+            weekdays = current_recurrence.weekdays
+            month_rule = current_recurrence.month_rule
+        else:
+            raise ValueError("current recurrence configuration is required")
 
         stmt = text("""
-            WITH candidate_occurrence AS (
+            WITH generation_bounds AS (
                 SELECT
-                    CASE :frequency
-                        WHEN 'daily' THEN CAST(:starts_at AS timestamp)
-                            + occurrence_index.n * :interval * INTERVAL '1 day'
-                        WHEN 'weekly' THEN CAST(:starts_at AS timestamp)
-                            + occurrence_index.n * :interval * INTERVAL '1 week'
-                        WHEN 'monthly' THEN CAST(:starts_at AS timestamp)
-                            + make_interval(months => (occurrence_index.n * :interval)::int)
-                    END AS starts_at,
-                    CASE :frequency
-                        WHEN 'daily' THEN CAST(:ends_at AS timestamp)
-                            + occurrence_index.n * :interval * INTERVAL '1 day'
-                        WHEN 'weekly' THEN CAST(:ends_at AS timestamp)
-                            + occurrence_index.n * :interval * INTERVAL '1 week'
-                        WHEN 'monthly' THEN CAST(:ends_at AS timestamp)
-                            + make_interval(months => (occurrence_index.n * :interval)::int)
-                    END AS ends_at
-                FROM generate_series(
-                    0,
-                    COALESCE(CAST(:occurrences_limit AS integer) - 1, 1000)
-                ) AS occurrence_index(n)
-            )
-            SELECT EXISTS (
+                    CASE
+                        WHEN CAST(:repeat_until AS date) IS NOT NULL
+                            THEN CAST(:repeat_until AS date)
+                        WHEN :frequency = 'daily' THEN
+                            CAST(:anchor_date AS date)
+                            + (
+                                :interval
+                                * COALESCE(CAST(:occurrences_limit AS integer), 1000)
+                            )::integer
+                        WHEN :frequency = 'weekly' THEN
+                            CAST(:anchor_date AS date)
+                            + (
+                                7
+                                * :interval
+                                * COALESCE(CAST(:occurrences_limit AS integer), 1000)
+                            )::integer
+                        ELSE (
+                            CAST(:anchor_date AS date)
+                            + make_interval(
+                                months => (
+                                    CASE
+                                        WHEN CAST(:week_of_month AS integer) = 5 THEN 4
+                                        WHEN CAST(:month_day AS integer) >= 29 THEN 2
+                                        ELSE 1
+                                    END
+                                    * :interval
+                                    * COALESCE(CAST(:occurrences_limit AS integer), 1000)
+                                )::integer
+                            )
+                        )::date
+                    END AS ends_on
+            ),
+            candidate_occurrence AS MATERIALIZED (
+                SELECT
+                    occurrence.planned_date::timestamp + CAST(:default_time AS time)
+                        AS starts_at,
+                    occurrence.planned_date::timestamp
+                        + CAST(:default_time AS time)
+                        + CAST(:default_duration AS interval) AS ends_at
+                FROM generation_bounds
+                CROSS JOIN LATERAL generate_task_recurrence_dates(
+                    :frequency,
+                    :interval,
+                    CAST(:anchor_date AS date),
+                    CAST(:weekdays AS smallint[]),
+                    CAST(:month_day AS integer),
+                    CAST(:week_of_month AS integer),
+                    CAST(:month_weekday AS integer),
+                    :business_day_policy,
+                    CAST(:anchor_date AS date),
+                    generation_bounds.ends_on,
+                    CAST(:repeat_until AS date),
+                    CAST(:occurrences_limit AS integer)
+                ) AS occurrence
+            ),
+            ordered_candidate AS (
+                SELECT
+                    candidate_occurrence.*,
+                    max(ends_at) OVER (
+                        ORDER BY starts_at, ends_at
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                    ) AS previous_max_ends_at
+                FROM candidate_occurrence
+            ),
+            existing_overlap AS (
                 SELECT 1
                 FROM candidate_occurrence
                 JOIN scheduled_task
-                    ON scheduled_task.starts_at < candidate_occurrence.ends_at
-                    AND scheduled_task.ends_at > candidate_occurrence.starts_at
+                    ON tsrange(scheduled_task.starts_at, scheduled_task.ends_at, '[)')
+                        && tsrange(
+                            candidate_occurrence.starts_at,
+                            candidate_occurrence.ends_at,
+                            '[)'
+                        )
                 JOIN task ON task.task_id = scheduled_task.task_id
                 WHERE
                     task.creator_id = :user_id
@@ -1233,12 +1306,21 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                                 AND task_recurrence_instance.deleted_at IS NULL
                         )
                     )
-                    AND (
-                        CAST(:repeat_until AS timestamp) IS NULL
-                        OR candidate_occurrence.starts_at <= CAST(:repeat_until AS timestamp)
-                    )
+                LIMIT 1
+            ),
+            internal_overlap AS (
+                SELECT 1
+                FROM ordered_candidate
+                WHERE starts_at < previous_max_ends_at
+                LIMIT 1
+            )
+            SELECT EXISTS (
+                SELECT 1 FROM existing_overlap
+                UNION ALL
+                SELECT 1 FROM internal_overlap
             ) AS has_overlap
         """)
+        weekdays_param = [int(weekday) for weekday in weekdays]
         result = await self.session.execute(
             stmt,
             {
@@ -1247,8 +1329,22 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 "recurrence_id": recurrence_id,
                 "frequency": frequency.value,
                 "interval": interval,
-                "starts_at": data.schedule.starts_at,
-                "ends_at": data.schedule.ends_at,
+                "anchor_date": data.anchor_date,
+                "default_time": data.default_time,
+                "default_duration": data.default_duration,
+                "weekdays": weekdays_param,
+                "month_day": month_rule.month_day if month_rule is not None else None,
+                "week_of_month": month_rule.week_of_month if month_rule is not None else None,
+                "month_weekday": (
+                    int(month_rule.weekday)
+                    if month_rule is not None and month_rule.weekday is not None
+                    else None
+                ),
+                "business_day_policy": (
+                    month_rule.business_day_policy.value
+                    if month_rule is not None
+                    else RecurrenceBusinessDayPolicy.NONE.value
+                ),
                 "repeat_until": data.repeat_until,
                 "occurrences_limit": data.occurrences_limit,
             },
@@ -1268,60 +1364,112 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     row_number() OVER () AS rule_index,
                     rule.frequency,
                     rule.interval,
-                    rule.starts_at,
-                    rule.ends_at,
+                    rule.anchor_date,
+                    rule.default_time,
+                    make_interval(secs => rule.default_duration_seconds) AS default_duration,
+                    ARRAY(
+                        SELECT weekday.value::smallint
+                        FROM jsonb_array_elements_text(rule.weekdays) AS weekday(value)
+                        ORDER BY weekday.value::smallint
+                    )::smallint[] AS weekdays,
+                    (rule.month_rule ->> 'month_day')::integer AS month_day,
+                    (rule.month_rule ->> 'week_of_month')::integer AS week_of_month,
+                    (rule.month_rule ->> 'weekday')::integer AS month_weekday,
+                    COALESCE(
+                        rule.month_rule ->> 'business_day_policy',
+                        'none'
+                    ) AS business_day_policy,
                     rule.repeat_until,
                     rule.occurrences_limit
                 FROM jsonb_to_recordset(CAST(:rules AS jsonb)) AS rule(
                     frequency text,
                     interval integer,
-                    starts_at timestamp,
-                    ends_at timestamp,
-                    repeat_until timestamp,
+                    anchor_date date,
+                    default_time time,
+                    default_duration_seconds double precision,
+                    weekdays jsonb,
+                    month_rule jsonb,
+                    repeat_until date,
                     occurrences_limit integer
                 )
+                WHERE rule.default_duration_seconds IS NOT NULL
             ),
             candidate_occurrence AS MATERIALIZED (
                 SELECT
                     rule_input.rule_index,
-                    CASE rule_input.frequency
-                        WHEN 'daily' THEN rule_input.starts_at
-                            + occurrence_index.n * rule_input.interval * INTERVAL '1 day'
-                        WHEN 'weekly' THEN rule_input.starts_at
-                            + occurrence_index.n * rule_input.interval * INTERVAL '1 week'
-                        WHEN 'monthly' THEN rule_input.starts_at
-                            + make_interval(months => (
-                                occurrence_index.n * rule_input.interval
-                            )::int)
-                    END AS starts_at,
-                    CASE rule_input.frequency
-                        WHEN 'daily' THEN rule_input.ends_at
-                            + occurrence_index.n * rule_input.interval * INTERVAL '1 day'
-                        WHEN 'weekly' THEN rule_input.ends_at
-                            + occurrence_index.n * rule_input.interval * INTERVAL '1 week'
-                        WHEN 'monthly' THEN rule_input.ends_at
-                            + make_interval(months => (
-                                occurrence_index.n * rule_input.interval
-                            )::int)
-                    END AS ends_at,
-                    rule_input.repeat_until
+                    occurrence.planned_date::timestamp + rule_input.default_time AS starts_at,
+                    occurrence.planned_date::timestamp
+                        + rule_input.default_time
+                        + rule_input.default_duration AS ends_at
                 FROM rule_input
-                CROSS JOIN LATERAL generate_series(
-                    0,
-                    COALESCE(rule_input.occurrences_limit - 1, 1000)
-                ) AS occurrence_index(n)
+                CROSS JOIN LATERAL generate_task_recurrence_dates(
+                    rule_input.frequency,
+                    rule_input.interval,
+                    rule_input.anchor_date,
+                    rule_input.weekdays,
+                    rule_input.month_day,
+                    rule_input.week_of_month,
+                    rule_input.month_weekday,
+                    rule_input.business_day_policy,
+                    rule_input.anchor_date,
+                    CASE
+                        WHEN rule_input.repeat_until IS NOT NULL
+                            THEN rule_input.repeat_until
+                        WHEN rule_input.frequency = 'daily' THEN
+                            rule_input.anchor_date
+                            + (
+                                rule_input.interval
+                                * COALESCE(rule_input.occurrences_limit, 1000)
+                            )::integer
+                        WHEN rule_input.frequency = 'weekly' THEN
+                            rule_input.anchor_date
+                            + (
+                                7
+                                * rule_input.interval
+                                * COALESCE(rule_input.occurrences_limit, 1000)
+                            )::integer
+                        ELSE (
+                            rule_input.anchor_date
+                            + make_interval(
+                                months => (
+                                    CASE
+                                        WHEN rule_input.week_of_month = 5 THEN 4
+                                        WHEN rule_input.month_day >= 29 THEN 2
+                                        ELSE 1
+                                    END
+                                    * rule_input.interval
+                                    * COALESCE(rule_input.occurrences_limit, 1000)
+                                )::integer
+                            )
+                        )::date
+                    END,
+                    rule_input.repeat_until,
+                    rule_input.occurrences_limit
+                ) AS occurrence
             ),
             bounded_candidate AS MATERIALIZED (
                 SELECT rule_index, starts_at, ends_at
                 FROM candidate_occurrence
-                WHERE repeat_until IS NULL OR starts_at <= repeat_until
+            ),
+            ordered_candidate AS (
+                SELECT
+                    bounded_candidate.*,
+                    max(ends_at) OVER (
+                        ORDER BY starts_at, ends_at
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                    ) AS previous_max_ends_at
+                FROM bounded_candidate
             ),
             existing_overlap AS (
                 SELECT 1
                 FROM bounded_candidate
                 JOIN scheduled_task
-                    ON scheduled_task.starts_at < bounded_candidate.ends_at
-                    AND scheduled_task.ends_at > bounded_candidate.starts_at
+                    ON tsrange(scheduled_task.starts_at, scheduled_task.ends_at, '[)')
+                        && tsrange(
+                            bounded_candidate.starts_at,
+                            bounded_candidate.ends_at,
+                            '[)'
+                        )
                 JOIN task ON task.task_id = scheduled_task.task_id
                 WHERE
                     task.creator_id = :user_id
@@ -1331,11 +1479,8 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             ),
             internal_overlap AS (
                 SELECT 1
-                FROM bounded_candidate AS left_candidate
-                JOIN bounded_candidate AS right_candidate
-                    ON right_candidate.rule_index > left_candidate.rule_index
-                    AND right_candidate.starts_at < left_candidate.ends_at
-                    AND right_candidate.ends_at > left_candidate.starts_at
+                FROM ordered_candidate
+                WHERE starts_at < previous_max_ends_at
                 LIMIT 1
             )
             SELECT EXISTS (
@@ -1357,6 +1502,10 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
     async def _get_recurrence(self, user_id: UUID, recurrence_id: UUID) -> TaskRecurrence:
         stmt = (
             select(TaskRecurrenceSeriesModel)
+            .options(
+                selectinload(TaskRecurrenceSeriesModel.weekdays),
+                selectinload(TaskRecurrenceSeriesModel.month_rule),
+            )
             .join(
                 TaskRecurrenceTemplateModel,
                 TaskRecurrenceTemplateModel.template_id == TaskRecurrenceSeriesModel.template_id,
@@ -1370,51 +1519,6 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
         result = await self.session.execute(stmt)
         return self._model_to_recurrence(result.scalar_one())
-
-    async def _replace_recurrence_rule(
-        self,
-        recurrence_id: UUID,
-        data: UpdateTaskRecurrence,
-        frequency: RecurrenceFrequency,
-    ) -> None:
-        deleted_weekdays = (
-            delete(TaskRecurrenceWeekdayModel)
-            .where(TaskRecurrenceWeekdayModel.series_id == recurrence_id)
-            .returning(TaskRecurrenceWeekdayModel.series_id)
-            .cte("deleted_recurrence_weekdays")
-        )
-        deleted_month_rule = (
-            delete(TaskRecurrenceMonthRuleModel)
-            .where(TaskRecurrenceMonthRuleModel.series_id == recurrence_id)
-            .returning(TaskRecurrenceMonthRuleModel.series_id)
-            .cte("deleted_recurrence_month_rule")
-        )
-
-        if frequency == RecurrenceFrequency.WEEKLY:
-            stmt = (
-                insert(TaskRecurrenceWeekdayModel)
-                .values(
-                    series_id=recurrence_id,
-                    weekday=data.schedule.starts_at.isoweekday(),
-                )
-                .add_cte(deleted_weekdays)
-                .add_cte(deleted_month_rule)
-            )
-        elif frequency == RecurrenceFrequency.MONTHLY:
-            stmt = (
-                insert(TaskRecurrenceMonthRuleModel)
-                .values(
-                    series_id=recurrence_id,
-                    month_day=data.schedule.starts_at.day,
-                    business_day_policy=RecurrenceBusinessDayPolicy.NONE,
-                )
-                .add_cte(deleted_weekdays)
-                .add_cte(deleted_month_rule)
-            )
-        else:
-            stmt = select(literal(1)).add_cte(deleted_weekdays).add_cte(deleted_month_rule)
-
-        await self.session.execute(stmt)
 
     async def _set_recurrence_tasks_status_from(
         self,
@@ -1649,6 +1753,20 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
 
     @classmethod
     def _select_recurrence_template_rows(cls, template_page):
+        weekdays = (
+            select(
+                func.array_agg(
+                    aggregate_order_by(
+                        TaskRecurrenceWeekdayModel.weekday,
+                        TaskRecurrenceWeekdayModel.weekday,
+                    )
+                )
+            )
+            .where(TaskRecurrenceWeekdayModel.series_id == TaskRecurrenceSeriesModel.series_id)
+            .correlate(TaskRecurrenceSeriesModel)
+            .scalar_subquery()
+            .label("weekdays")
+        )
         return (
             select(
                 TaskRecurrenceTemplateModel.template_id,
@@ -1660,6 +1778,11 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 TagModel.name.label("tag_name"),
                 TagModel.created_at.label("tag_created_at"),
                 *cls._recurrence_returning_columns(),
+                weekdays,
+                TaskRecurrenceMonthRuleModel.month_day,
+                TaskRecurrenceMonthRuleModel.week_of_month,
+                TaskRecurrenceMonthRuleModel.weekday.label("month_weekday"),
+                TaskRecurrenceMonthRuleModel.business_day_policy,
             )
             .select_from(TaskRecurrenceTemplateModel)
             .join(
@@ -1670,6 +1793,10 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 TaskRecurrenceSeriesModel,
                 (TaskRecurrenceSeriesModel.template_id == TaskRecurrenceTemplateModel.template_id)
                 & (TaskRecurrenceSeriesModel.deleted_at.is_(None)),
+            )
+            .outerjoin(
+                TaskRecurrenceMonthRuleModel,
+                TaskRecurrenceMonthRuleModel.series_id == TaskRecurrenceSeriesModel.series_id,
             )
             .outerjoin(
                 TaskRecurrenceTemplateTagModel,
@@ -1700,27 +1827,15 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             owner_template.c.template_id,
             sql_cast(literal(data.frequency.value), TaskRecurrenceSeriesModel.frequency.type),
             literal(data.interval),
+            sql_cast(literal(data.anchor_date), TaskRecurrenceSeriesModel.anchor_date.type),
+            sql_cast(literal(data.default_time), TaskRecurrenceSeriesModel.default_time.type),
             sql_cast(
-                literal(data.schedule.starts_at.date()), TaskRecurrenceSeriesModel.anchor_date.type
-            ),
-            sql_cast(
-                literal(data.schedule.starts_at.time()), TaskRecurrenceSeriesModel.default_time.type
-            ),
-            sql_cast(
-                literal(data.schedule.ends_at - data.schedule.starts_at),
+                literal(data.default_duration),
                 TaskRecurrenceSeriesModel.default_duration.type,
-            ),
-            sql_cast(
-                literal(RecurrenceCalculationMode.SCHEDULED_DATE.value),
-                TaskRecurrenceSeriesModel.calculation_mode.type,
-            ),
-            sql_cast(
-                literal(RecurrenceSkipPolicy.ALLOW_OVERDUE.value),
-                TaskRecurrenceSeriesModel.skip_policy.type,
             ),
             sql_cast(literal(end_mode.value), TaskRecurrenceSeriesModel.end_mode.type),
             sql_cast(
-                literal(data.repeat_until.date() if data.repeat_until else None),
+                literal(data.repeat_until),
                 TaskRecurrenceSeriesModel.repeat_until.type,
             ),
             literal(data.occurrences_limit),
@@ -1735,8 +1850,6 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     "anchor_date",
                     "default_time",
                     "default_duration",
-                    "calculation_mode",
-                    "skip_policy",
                     "end_mode",
                     "repeat_until",
                     "max_occurrences",
@@ -1748,15 +1861,21 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
 
     @staticmethod
-    def _insert_recurrence_weekday_from_series(inserted_series):
+    def _insert_recurrence_weekdays(inserted_series, data: AddTaskRecurrence):
+        if data.weekdays:
+            weekday_values = union_all(
+                *(
+                    select(inserted_series.c.series_id, literal(int(weekday)))
+                    for weekday in data.weekdays
+                )
+            )
+        else:
+            weekday_values = select(inserted_series.c.series_id, literal(0)).where(literal(False))
         return (
             pg_insert(TaskRecurrenceWeekdayModel)
             .from_select(
                 ("series_id", "weekday"),
-                select(
-                    inserted_series.c.series_id,
-                    sql_cast(func.extract("isodow", inserted_series.c.anchor_date), Integer),
-                ).where(inserted_series.c.frequency == RecurrenceFrequency.WEEKLY),
+                weekday_values,
             )
             .on_conflict_do_nothing(index_elements=["series_id", "weekday"])
             .returning(TaskRecurrenceWeekdayModel.series_id)
@@ -1764,19 +1883,39 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         )
 
     @staticmethod
-    def _insert_recurrence_month_rule_from_series(inserted_series):
+    def _insert_recurrence_month_rule(inserted_series, data: AddTaskRecurrence):
+        month_rule = data.month_rule
+        month_values = select(
+            inserted_series.c.series_id,
+            literal(month_rule.month_day if month_rule is not None else None),
+            literal(month_rule.week_of_month if month_rule is not None else None),
+            literal(
+                int(month_rule.weekday)
+                if month_rule is not None and month_rule.weekday is not None
+                else None
+            ),
+            sql_cast(
+                literal(
+                    month_rule.business_day_policy.value
+                    if month_rule is not None
+                    else RecurrenceBusinessDayPolicy.NONE.value
+                ),
+                TaskRecurrenceMonthRuleModel.business_day_policy.type,
+            ),
+        )
+        if month_rule is None:
+            month_values = month_values.where(literal(False))
         return (
             pg_insert(TaskRecurrenceMonthRuleModel)
             .from_select(
-                ("series_id", "month_day", "business_day_policy"),
-                select(
-                    inserted_series.c.series_id,
-                    sql_cast(func.extract("day", inserted_series.c.anchor_date), Integer),
-                    sql_cast(
-                        literal(RecurrenceBusinessDayPolicy.NONE.value),
-                        TaskRecurrenceMonthRuleModel.business_day_policy.type,
-                    ),
-                ).where(inserted_series.c.frequency == RecurrenceFrequency.MONTHLY),
+                (
+                    "series_id",
+                    "month_day",
+                    "week_of_month",
+                    "weekday",
+                    "business_day_policy",
+                ),
+                month_values,
             )
             .on_conflict_do_nothing(index_elements=["series_id"])
             .returning(TaskRecurrenceMonthRuleModel.series_id)

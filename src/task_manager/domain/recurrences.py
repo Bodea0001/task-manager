@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import date
 
 from domain.value_objects.tasks import RecurrenceEndMode
 
 
 def recurrence_end_mode(
-    *, repeat_until: datetime | None, max_occurrences: int | None
+    *, repeat_until: date | None, max_occurrences: int | None
 ) -> RecurrenceEndMode:
     if repeat_until is not None and max_occurrences is not None:
         raise ValueError("repeat_until and max_occurrences cannot both be provided")

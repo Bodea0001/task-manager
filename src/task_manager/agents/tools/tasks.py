@@ -1,6 +1,6 @@
 from uuid import UUID
 from typing import Any
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from langchain.tools import tool
 
@@ -18,6 +18,7 @@ from dto.tasks import (
 from agents.schemas.tools import (
     HiddenRuntime,
     AddTaskRecurrenceData,
+    RecurrenceMonthRuleData,
     CancelTaskInput,
     CompleteTaskInput,
     CountTaskRecurrenceTemplatesInput,
@@ -57,6 +58,8 @@ from domain.value_objects.tasks import (
     TaskPriority,
     TaskStatus,
     RecurrenceFrequency,
+    RecurrenceMonthRule,
+    Weekday,
     TaskOccurrence,
     TaskRecurrence,
     ScheduleAvailability,
@@ -771,8 +774,12 @@ async def create_task_recurrence_template(
                 rules=tuple(
                     AddTaskRecurrence(
                         frequency=rule.frequency,
-                        schedule=rule.schedule,
+                        anchor_date=rule.anchor_date,
+                        default_time=rule.default_time,
                         interval=rule.interval,
+                        default_duration=rule.default_duration,
+                        weekdays=rule.weekdays,
+                        month_rule=_month_rule_to_domain(rule.month_rule),
                         repeat_until=rule.repeat_until,
                         occurrences_limit=rule.occurrences_limit,
                     )
@@ -825,9 +832,13 @@ async def add_task_recurrence_rule(
     template_id: UUID,
     runtime: HiddenRuntime,
     frequency: RecurrenceFrequency,
-    schedule: Schedule,
+    anchor_date: date,
+    default_time: time,
     interval: int = 1,
-    repeat_until: datetime | None = None,
+    default_duration: timedelta | None = None,
+    weekdays: tuple[Weekday, ...] = (),
+    month_rule: RecurrenceMonthRuleData | None = None,
+    repeat_until: date | None = None,
     occurrences_limit: int | None = None,
 ) -> dict[str, Any]:
     """Add a recurrence rule.
@@ -835,9 +846,13 @@ async def add_task_recurrence_rule(
     Args:
         template_id: Exact recurrence template id.
         frequency: Recurrence frequency.
-        schedule: Recurrence schedule.
+        anchor_date: Date of the first occurrence.
+        default_time: Deadline time for each occurrence.
         interval: Positive interval.
-        repeat_until: Optional end datetime.
+        default_duration: Optional duration used to create a schedule.
+        weekdays: Weekdays for a weekly rule.
+        month_rule: Calendar selector for a monthly rule.
+        repeat_until: Optional inclusive end date.
         occurrences_limit: Optional occurrence limit.
     """
     try:
@@ -846,8 +861,12 @@ async def add_task_recurrence_rule(
             template_id,
             AddTaskRecurrence(
                 frequency=frequency,
-                schedule=schedule,
+                anchor_date=anchor_date,
+                default_time=default_time,
                 interval=interval,
+                default_duration=default_duration,
+                weekdays=weekdays,
+                month_rule=_month_rule_to_domain(month_rule),
                 repeat_until=repeat_until,
                 occurrences_limit=occurrences_limit,
             ),
@@ -862,7 +881,7 @@ async def add_task_recurrence_rule(
 
 @tool(
     "update_task_recurrence_rule",
-    description="Update one recurrence rule schedule or end condition.",
+    description="Update one recurrence rule timing or end condition.",
     args_schema=UpdateTaskRecurrenceInput,
     parse_docstring=True,
     error_on_invalid_docstring=False,
@@ -870,16 +889,20 @@ async def add_task_recurrence_rule(
 async def update_task_recurrence_rule(
     recurrence_id: UUID,
     runtime: HiddenRuntime,
-    schedule: Schedule,
-    repeat_until: datetime | None = None,
+    anchor_date: date,
+    default_time: time,
+    default_duration: timedelta | None = None,
+    repeat_until: date | None = None,
     occurrences_limit: int | None = None,
 ) -> dict[str, Any]:
     """Update a recurrence rule.
 
     Args:
         recurrence_id: Exact recurrence rule id.
-        schedule: Updated recurrence schedule.
-        repeat_until: Optional end datetime.
+        anchor_date: Date of the first occurrence.
+        default_time: Deadline time for each occurrence.
+        default_duration: Optional duration used to create a schedule.
+        repeat_until: Optional inclusive end date.
         occurrences_limit: Optional occurrence limit.
     """
     try:
@@ -887,7 +910,9 @@ async def update_task_recurrence_rule(
             runtime.context.user_id,
             recurrence_id,
             UpdateTaskRecurrence(
-                schedule=schedule,
+                anchor_date=anchor_date,
+                default_time=default_time,
+                default_duration=default_duration,
                 repeat_until=repeat_until,
                 occurrences_limit=occurrences_limit,
             ),
@@ -1213,7 +1238,25 @@ def _recurrence_rule_to_dict(rule: TaskRecurrence) -> dict[str, Any]:
         "template_id": str(rule.template_id),
         "frequency": rule.frequency.value,
         "interval": rule.interval,
-        "schedule": _schedule_to_dict(rule.schedule),
+        "anchor_date": rule.anchor_date.isoformat(),
+        "default_time": rule.default_time.isoformat(),
+        "default_duration_seconds": (
+            rule.default_duration.total_seconds() if rule.default_duration is not None else None
+        ),
+        "weekdays": [int(weekday) for weekday in rule.weekdays],
+        "month_rule": (
+            {
+                "month_day": rule.month_rule.month_day,
+                "week_of_month": rule.month_rule.week_of_month,
+                "weekday": int(rule.month_rule.weekday)
+                if rule.month_rule.weekday is not None
+                else None,
+                "business_day_policy": rule.month_rule.business_day_policy.value,
+            }
+            if rule.month_rule is not None
+            else None
+        ),
+        "schedule": _schedule_to_dict(rule.schedule) if rule.schedule is not None else None,
         "repeat_until": rule.repeat_until.isoformat() if rule.repeat_until else None,
         "occurrences_limit": rule.occurrences_limit,
     }
@@ -1224,6 +1267,20 @@ def _occurrence_to_dict(occurrence: TaskOccurrence) -> dict[str, Any]:
         "recurrence_id": str(occurrence.recurrence_id),
         "task_id": str(occurrence.task_id) if occurrence.task_id else None,
         "original_starts_at": occurrence.original_starts_at.isoformat(),
-        "schedule": _schedule_to_dict(occurrence.schedule),
+        "due_at": occurrence.due_at.isoformat(),
+        "schedule": (
+            _schedule_to_dict(occurrence.schedule) if occurrence.schedule is not None else None
+        ),
         "is_cancelled": occurrence.is_cancelled,
     }
+
+
+def _month_rule_to_domain(rule: RecurrenceMonthRuleData | None) -> RecurrenceMonthRule | None:
+    if rule is None:
+        return None
+    return RecurrenceMonthRule(
+        month_day=rule.month_day,
+        week_of_month=rule.week_of_month,
+        weekday=rule.weekday,
+        business_day_policy=rule.business_day_policy,
+    )

@@ -1,5 +1,5 @@
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import asdict
 
 from sqlalchemy import select, update, literal
@@ -62,10 +62,10 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
                 TaskRecurrenceTemplateModel.deleted_at.is_(None),
                 TaskModel.deleted_at.is_(None),
                 TaskRecurrenceInstanceModel.deleted_at.is_(None),
-                ScheduledTaskModel.starts_at < window.ends_at,
-                ScheduledTaskModel.ends_at > window.starts_at,
+                TaskModel.due_at >= window.starts_at,
+                TaskModel.due_at <= window.ends_at,
             )
-            .order_by(ScheduledTaskModel.starts_at, ScheduledTaskModel.ends_at)
+            .order_by(TaskModel.due_at, TaskModel.task_id)
         )
         result = await self.session.execute(stmt)
         return [self._row_to_task_occurrence(row) for row in result.all()]
@@ -120,10 +120,14 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
                 recurrence_id,
                 original_starts_at,
             )
+            due_at = data.due_at or (
+                schedule.ends_at if schedule is not None else original_starts_at
+            )
             return TaskOccurrence(
                 recurrence_id=recurrence_id,
                 task_id=None,
                 original_starts_at=original_starts_at,
+                due_at=due_at,
                 schedule=schedule,
                 is_cancelled=data.is_cancelled,
             )
@@ -154,10 +158,12 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
             schedule = data.schedule
         else:
             schedule = await self._schedule_for_task(task_id)
+        due_at = await self._due_at_for_task(task_id)
         return TaskOccurrence(
             recurrence_id=recurrence_id,
             task_id=task_id,
             original_starts_at=original_starts_at,
+            due_at=due_at,
             schedule=schedule,
             is_cancelled=data.is_cancelled,
         )
@@ -265,7 +271,7 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
         self,
         recurrence_id: UUID,
         original_starts_at: datetime,
-    ) -> Schedule:
+    ) -> Schedule | None:
         result = await self.session.execute(
             select(
                 TaskRecurrenceSeriesModel.default_duration,
@@ -274,7 +280,9 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
                 TaskRecurrenceSeriesModel.deleted_at.is_(None),
             )
         )
-        duration = result.scalar_one() or timedelta(0)
+        duration = result.scalar_one()
+        if duration is None:
+            return None
         return Schedule(starts_at=original_starts_at, ends_at=original_starts_at + duration)
 
     async def _upsert_recurrence_occurrence_override(
@@ -313,8 +321,15 @@ class TaskOccurrenceMixin(TaskRecurrenceMixin, TaskScheduleMixin):
         )
         await self.session.execute(stmt)
 
-    async def _schedule_for_task(self, task_id: UUID) -> Schedule:
+    async def _schedule_for_task(self, task_id: UUID) -> Schedule | None:
         result = await self.session.execute(
             select(ScheduledTaskModel).where(ScheduledTaskModel.task_id == task_id)
         )
-        return self._model_to_schedule(result.scalar_one())
+        model = result.scalar_one_or_none()
+        return self._model_to_schedule(model) if model is not None else None
+
+    async def _due_at_for_task(self, task_id: UUID) -> datetime:
+        result = await self.session.execute(
+            select(TaskModel.due_at).where(TaskModel.task_id == task_id)
+        )
+        return result.scalar_one()

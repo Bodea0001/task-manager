@@ -1,7 +1,7 @@
 import json
 from uuid import UUID
 from typing import Sequence, Any, Concatenate, Final, ParamSpec, TypeVar, cast, overload
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from functools import wraps
 from dataclasses import asdict
 from collections.abc import Awaitable, Callable
@@ -27,6 +27,7 @@ from models.tasks import (
     Task as TaskModel,
     ScheduledTask as ScheduledTaskModel,
     TaskRecurrenceSeries as TaskRecurrenceSeriesModel,
+    TaskRecurrenceMonthRule as TaskRecurrenceMonthRuleModel,
     TaskRecurrenceInstance as TaskRecurrenceInstanceModel,
     TaskRecurrenceTemplate as TaskRecurrenceTemplateModel,
 )
@@ -45,7 +46,9 @@ from domain.value_objects.tasks import (
     TaskPriority,
     TaskOccurrence,
     TaskRecurrence,
+    Weekday,
     RecurrenceFrequency,
+    RecurrenceMonthRule,
     TaskRecurrenceTemplate,
 )
 from adapters.repository import SQLAlchemyRepository
@@ -143,13 +146,14 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
                 TaskRecurrenceInstanceModel.series_id.label("recurrence_id"),
                 TaskRecurrenceInstanceModel.task_id,
                 TaskRecurrenceInstanceModel.planned_starts_at.label("original_starts_at"),
+                TaskModel.due_at,
                 ScheduledTaskModel.starts_at,
                 ScheduledTaskModel.ends_at,
                 (TaskModel.status == TaskStatus.CANCELLED).label("is_cancelled"),
             )
             .select_from(TaskRecurrenceInstanceModel)
             .join(TaskModel, TaskModel.task_id == TaskRecurrenceInstanceModel.task_id)
-            .join(ScheduledTaskModel, ScheduledTaskModel.task_id == TaskModel.task_id)
+            .outerjoin(ScheduledTaskModel, ScheduledTaskModel.task_id == TaskModel.task_id)
         )
 
     @staticmethod
@@ -179,31 +183,26 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
     @staticmethod
     def _recurrence_update_values(
         data: AddTaskRecurrence | UpdateTaskRecurrence,
-        *,
-        frequency: RecurrenceFrequency | None = None,
-        interval: int | None = None,
     ) -> dict[str, Any]:
-        if isinstance(data, AddTaskRecurrence):
-            frequency = data.frequency
-            interval = data.interval
-        if frequency is None or interval is None:
-            raise ValueError("recurrence frequency and interval are required")
-
-        return {
-            "frequency": frequency,
-            "step": interval,
-            "anchor_date": data.schedule.starts_at.date(),
-            "default_time": data.schedule.starts_at.time(),
-            "default_duration": data.schedule.ends_at - data.schedule.starts_at,
+        values = {
+            "anchor_date": data.anchor_date,
+            "default_time": data.default_time,
+            "default_duration": data.default_duration,
             "end_mode": recurrence_end_mode(
                 repeat_until=data.repeat_until,
                 max_occurrences=data.occurrences_limit,
             ),
-            "repeat_until": data.repeat_until.date() if data.repeat_until else None,
+            "repeat_until": data.repeat_until,
             "max_occurrences": data.occurrences_limit,
             "generation_finished_at": None,
             "generation_stop_reason": None,
         }
+        if isinstance(data, AddTaskRecurrence):
+            values.update(
+                frequency=data.frequency,
+                step=data.interval,
+            )
+        return values
 
     @staticmethod
     def _recurrence_returning_columns():
@@ -229,15 +228,17 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
             frequency = data.frequency
         if frequency is None:
             raise ValueError("recurrence frequency is required")
-
         days = {
             RecurrenceFrequency.DAILY: settings.recurrence.daily_materialization_days,
             RecurrenceFrequency.WEEKLY: settings.recurrence.weekly_materialization_days,
             RecurrenceFrequency.MONTHLY: settings.recurrence.monthly_materialization_days,
         }[frequency]
+        starts_at = datetime.combine(data.anchor_date, data.default_time)
+        if frequency == RecurrenceFrequency.MONTHLY:
+            starts_at -= timedelta(days=2)
         return Schedule(
-            starts_at=data.schedule.starts_at,
-            ends_at=data.schedule.starts_at + timedelta(days=days),
+            starts_at=starts_at,
+            ends_at=starts_at + timedelta(days=days),
         )
 
     @classmethod
@@ -247,7 +248,8 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
         *,
         frequency: RecurrenceFrequency,
     ) -> Schedule:
-        starts_at = max(data.schedule.starts_at, datetime.now())
+        rule_start = datetime.combine(data.anchor_date, data.default_time)
+        starts_at = max(rule_start, datetime.now())
         initial_window = cls._initial_materialization_window(data, frequency=frequency)
         return Schedule(
             starts_at=starts_at,
@@ -261,8 +263,13 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
                 {
                     "frequency": rule.frequency.value,
                     "interval": rule.interval,
-                    "starts_at": rule.schedule.starts_at.isoformat(),
-                    "ends_at": rule.schedule.ends_at.isoformat(),
+                    "anchor_date": rule.anchor_date.isoformat(),
+                    "default_time": rule.default_time.isoformat(),
+                    "default_duration_seconds": rule.default_duration.total_seconds()
+                    if rule.default_duration is not None
+                    else None,
+                    "weekdays": [int(weekday) for weekday in rule.weekdays],
+                    "month_rule": asdict(rule.month_rule) if rule.month_rule is not None else None,
                     "repeat_until": rule.repeat_until.isoformat()
                     if rule.repeat_until is not None
                     else None,
@@ -557,34 +564,58 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
 
     @staticmethod
     def _model_to_recurrence(model: TaskRecurrenceSeriesModel) -> TaskRecurrence:
-        starts_at = datetime.combine(model.anchor_date, model.default_time or time.min)
-        ends_at = starts_at + (model.default_duration or timedelta(0))
         return TaskRecurrence(
             recurrence_id=model.series_id,
             template_id=model.template_id,
             frequency=model.frequency,
             interval=model.step,
-            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
-            repeat_until=datetime.combine(model.repeat_until, time.min)
-            if model.repeat_until is not None
-            else None,
+            anchor_date=model.anchor_date,
+            default_time=model.default_time,
+            default_duration=model.default_duration,
+            weekdays=tuple(Weekday(item.weekday) for item in model.weekdays),
+            month_rule=TaskRepositoryCommon._month_rule_from_model(model.month_rule),
+            repeat_until=model.repeat_until,
             occurrences_limit=model.max_occurrences,
         )
 
     @staticmethod
     def _row_to_recurrence(row: Row[Any]) -> TaskRecurrence:
-        starts_at = datetime.combine(row.anchor_date, row.default_time or time.min)
-        ends_at = starts_at + (row.default_duration or timedelta(0))
         return TaskRecurrence(
             recurrence_id=row.series_id,
             template_id=row.template_id,
             frequency=RecurrenceFrequency(row.frequency),
             interval=row.step,
-            schedule=Schedule(starts_at=starts_at, ends_at=ends_at),
-            repeat_until=datetime.combine(row.repeat_until, time.min)
-            if row.repeat_until is not None
-            else None,
+            anchor_date=row.anchor_date,
+            default_time=row.default_time,
+            default_duration=row.default_duration,
+            weekdays=tuple(Weekday(value) for value in (row.weekdays or ())),
+            month_rule=TaskRepositoryCommon._month_rule_from_row(row),
+            repeat_until=row.repeat_until,
             occurrences_limit=row.max_occurrences,
+        )
+
+    @staticmethod
+    def _month_rule_from_model(
+        model: TaskRecurrenceMonthRuleModel | None,
+    ) -> RecurrenceMonthRule | None:
+        if model is None:
+            return None
+        return RecurrenceMonthRule(
+            month_day=model.month_day,
+            week_of_month=model.week_of_month,
+            weekday=Weekday(model.weekday) if model.weekday is not None else None,
+            business_day_policy=model.business_day_policy,
+        )
+
+    @staticmethod
+    def _month_rule_from_row(row: Row[Any]) -> RecurrenceMonthRule | None:
+        if row.month_day is None and row.week_of_month is None:
+            return None
+        return RecurrenceMonthRule(
+            month_day=row.month_day,
+            week_of_month=row.week_of_month,
+            weekday=Weekday(row.month_weekday) if row.month_weekday is not None else None,
+            business_day_policy=row.business_day_policy,
         )
 
     @staticmethod
@@ -610,10 +641,16 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
 
     @staticmethod
     def _row_to_task_occurrence(row: Row[Any]) -> TaskOccurrence:
+        schedule = (
+            Schedule(starts_at=row.starts_at, ends_at=row.ends_at)
+            if row.starts_at is not None and row.ends_at is not None
+            else None
+        )
         return TaskOccurrence(
             recurrence_id=row.recurrence_id,
             task_id=row.task_id,
             original_starts_at=row.original_starts_at,
-            schedule=Schedule(starts_at=row.starts_at, ends_at=row.ends_at),
+            due_at=row.due_at,
+            schedule=schedule,
             is_cancelled=row.is_cancelled,
         )

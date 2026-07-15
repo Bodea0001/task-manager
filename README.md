@@ -17,8 +17,8 @@ mark it as done, find related tasks, or organize tasks for later.
 - Shows which existing tasks would get in the way before adding work to a
   specific time window.
 - Finds the nearest open time when the user knows how long the work should take.
-- Supports recurring tasks for work that repeats on a daily, weekly, or monthly
-  cadence.
+- Supports recurring tasks with daily, selected-weekday, and monthly calendar
+  rules.
 - Lets users review recurring tasks.
 - Lets users adjust, stop, or remove recurring tasks when plans change.
 - Makes it easy to change plans when deadlines, priorities, or details move.
@@ -55,7 +55,9 @@ existing task.
 
 For repeated work, the assistant should use recurring tasks instead of creating
 many independent tasks one by one. Recurring tasks support daily, weekly, and
-monthly schedules, planned time windows, and optional end limits.
+monthly rules, multiple weekdays, monthly calendar positions, optional work
+duration, and optional end limits. Without a duration, each occurrence has a
+deadline but does not reserve time in the schedule.
 
 When a user wants to change when a recurring task happens or when it ends, the
 assistant can update the recurring task. When a user wants to change how often
@@ -127,6 +129,8 @@ Create recurring work:
 - "Create a daily standup prep task at 09:00 for 15 minutes."
 - "Add a weekly task to review invoices every Monday from 10:00 to 11:00."
 - "Create a monthly task to pay rent on the first day of each month."
+- "Remind me to review support requests every Monday and Thursday at 09:00."
+- "Create a reminder for the last Friday of every month at 16:00."
 - "Schedule a recurring workout every two days from 07:00 to 08:00."
 - "Create a weekly product metrics review with high priority."
 - "Add a monthly server maintenance task and stop after 6 occurrences."
@@ -165,7 +169,8 @@ Implemented product areas:
 - Tasks: creation, updates, deadlines, scheduling, priorities, status changes,
   removal, search, counts, free-time lookup across chosen periods, schedule
   availability checks, nearest open time lookup, and change history.
-- Recurring tasks: daily/weekly/monthly recurring work, schedule changes,
+- Recurring tasks: daily, selected-weekday, and monthly calendar rules,
+  deadline-only or scheduled occurrences, end limits, safe recalculation,
   skipped dates, stopping, deletion, and paginated listing.
 - Tags and context: tag creation, renaming, removal, task tagging, contextual
   lookup, and change history.

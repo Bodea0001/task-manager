@@ -1,6 +1,6 @@
 from uuid import UUID
-from enum import StrEnum
-from datetime import datetime
+from enum import IntEnum, StrEnum
+from datetime import date, datetime, time, timedelta
 from dataclasses import field, dataclass
 
 from domain.value_objects.tags import Tag
@@ -30,18 +30,6 @@ class RecurrenceFrequency(StrEnum):
     MONTHLY = "monthly"
 
 
-class RecurrenceCalculationMode(StrEnum):
-    SCHEDULED_DATE = "scheduled_date"
-    COMPLETION_DATE = "completion_date"
-
-
-class RecurrenceSkipPolicy(StrEnum):
-    ALLOW_OVERDUE = "allow_overdue"
-    CREATE_NEXT_INDEPENDENTLY = "create_next_independently"
-    CREATE_NEXT_AFTER_COMPLETION = "create_next_after_completion"
-    MOVE_TO_NEXT_DATE = "move_to_next_date"
-
-
 class RecurrenceEndMode(StrEnum):
     NEVER = "never"
     UNTIL_DATE = "until_date"
@@ -59,6 +47,16 @@ class RecurrenceBusinessDayPolicy(StrEnum):
     NONE = "none"
     NEXT_BUSINESS_DAY = "next_business_day"
     PREVIOUS_BUSINESS_DAY = "previous_business_day"
+
+
+class Weekday(IntEnum):
+    MONDAY = 1
+    TUESDAY = 2
+    WEDNESDAY = 3
+    THURSDAY = 4
+    FRIDAY = 5
+    SATURDAY = 6
+    SUNDAY = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,9 +110,33 @@ class TaskRecurrence:
     template_id: UUID
     frequency: RecurrenceFrequency
     interval: int
-    schedule: Schedule
-    repeat_until: datetime | None = None
+    anchor_date: date
+    default_time: time
+    default_duration: timedelta | None = None
+    weekdays: tuple[Weekday, ...] = ()
+    month_rule: "RecurrenceMonthRule | None" = None
+    repeat_until: date | None = None
     occurrences_limit: int | None = None
+
+    @property
+    def due_at(self) -> datetime:
+        starts_at = datetime.combine(self.anchor_date, self.default_time)
+        return starts_at + (self.default_duration or timedelta(0))
+
+    @property
+    def schedule(self) -> Schedule | None:
+        if self.default_duration is None:
+            return None
+        starts_at = datetime.combine(self.anchor_date, self.default_time)
+        return Schedule(starts_at=starts_at, ends_at=starts_at + self.default_duration)
+
+
+@dataclass(frozen=True, slots=True)
+class RecurrenceMonthRule:
+    month_day: int | None = None
+    week_of_month: int | None = None
+    weekday: Weekday | None = None
+    business_day_policy: RecurrenceBusinessDayPolicy = RecurrenceBusinessDayPolicy.NONE
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,5 +144,6 @@ class TaskOccurrence:
     recurrence_id: UUID
     task_id: UUID | None
     original_starts_at: datetime
-    schedule: Schedule
+    due_at: datetime
+    schedule: Schedule | None = None
     is_cancelled: bool = False

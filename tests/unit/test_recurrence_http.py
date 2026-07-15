@@ -39,7 +39,11 @@ class RecurrenceWorkflowService:
                 template_id=template_id,
                 frequency=item.frequency,
                 interval=item.interval,
-                schedule=item.schedule,
+                anchor_date=item.anchor_date,
+                default_time=item.default_time,
+                default_duration=item.default_duration,
+                weekdays=item.weekdays,
+                month_rule=item.month_rule,
                 repeat_until=item.repeat_until,
                 occurrences_limit=item.occurrences_limit,
             )
@@ -68,7 +72,9 @@ class RecurrenceWorkflowService:
     ) -> TaskRecurrence:
         updated = replace(
             self.rules[recurrence_id],
-            schedule=data.schedule,
+            anchor_date=data.anchor_date,
+            default_time=data.default_time,
+            default_duration=data.default_duration,
             repeat_until=data.repeat_until,
             occurrences_limit=data.occurrences_limit,
         )
@@ -87,7 +93,8 @@ class RecurrenceWorkflowService:
             TaskOccurrence(
                 recurrence_id=rule.recurrence_id,
                 task_id=uuid4(),
-                original_starts_at=rule.schedule.starts_at,
+                original_starts_at=datetime.combine(rule.anchor_date, rule.default_time),
+                due_at=rule.due_at,
                 schedule=rule.schedule,
             )
             for rule in self.templates[template_id].rules
@@ -105,6 +112,7 @@ class RecurrenceWorkflowService:
             recurrence_id=recurrence_id,
             task_id=None,
             original_starts_at=original_starts_at,
+            due_at=data.due_at or data.schedule.ends_at if data.schedule else rule.due_at,
             schedule=data.schedule or rule.schedule,
             is_cancelled=data.is_cancelled,
         )
@@ -120,6 +128,7 @@ class RecurrenceWorkflowService:
             recurrence_id=recurrence_id,
             task_id=None,
             original_starts_at=original_starts_at,
+            due_at=rule.due_at,
             schedule=rule.schedule,
             is_cancelled=True,
         )
@@ -166,10 +175,10 @@ async def test_user_can_manage_recurring_work_through_http() -> None:
                 "rules": [
                     {
                         "frequency": "weekly",
-                        "schedule": {
-                            "starts_at": "2026-07-13T09:00:00",
-                            "ends_at": "2026-07-13T10:00:00",
-                        },
+                        "anchor_date": "2026-07-13",
+                        "default_time": "09:00:00",
+                        "default_duration": "PT1H",
+                        "weekdays": [1],
                     }
                 ],
             },
@@ -183,11 +192,20 @@ async def test_user_can_manage_recurring_work_through_http() -> None:
         updated_rule = await client.patch(
             f"/api/v1/recurrence-rules/{recurrence_id}",
             json={
-                "schedule": {
-                    "starts_at": "2026-07-13T11:00:00",
-                    "ends_at": "2026-07-13T12:00:00",
-                },
+                "anchor_date": "2026-07-13",
+                "default_time": "11:00:00",
+                "default_duration": "PT1H",
                 "occurrences_limit": 5,
+            },
+        )
+        immutable_update = await client.patch(
+            f"/api/v1/recurrence-rules/{recurrence_id}",
+            json={
+                "anchor_date": "2026-07-13",
+                "default_time": "11:00:00",
+                "default_duration": "PT1H",
+                "occurrences_limit": 5,
+                "frequency": "daily",
             },
         )
         occurrences = await client.get(
@@ -220,6 +238,8 @@ async def test_user_can_manage_recurring_work_through_http() -> None:
     assert updated_rule.status_code == 200
     assert updated_rule.json()["schedule"]["starts_at"] == "2026-07-13T11:00:00"
     assert updated_rule.json()["occurrences_limit"] == 5
+    assert immutable_update.status_code == 422
+    assert immutable_update.json()["code"] == "request_validation_error"
     assert occurrences.status_code == 200
     assert len(occurrences.json()["occurrences"]) == 1
     assert changed_occurrence.status_code == 200
@@ -256,10 +276,10 @@ async def test_recurrence_datetime_with_timezone_is_rejected() -> None:
                 "rules": [
                     {
                         "frequency": "weekly",
-                        "schedule": {
-                            "starts_at": "2026-07-13T09:00:00+03:00",
-                            "ends_at": "2026-07-13T10:00:00+03:00",
-                        },
+                        "anchor_date": "2026-07-13",
+                        "default_time": "09:00:00+03:00",
+                        "default_duration": "PT1H",
+                        "weekdays": [1],
                     }
                 ],
             },

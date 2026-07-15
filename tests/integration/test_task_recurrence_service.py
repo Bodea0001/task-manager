@@ -1,5 +1,4 @@
-from datetime import datetime
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -11,12 +10,15 @@ from constants import TEST_OTHER_USER_ID, TEST_TITLE_PREFIX, TEST_USER_ID
 from domain.value_objects.audit import AuditEventType
 from domain.value_objects.tasks import (
     FreeTime,
+    RecurrenceBusinessDayPolicy,
     RecurrenceFrequency,
+    RecurrenceMonthRule,
     Schedule,
     Task,
     TaskKind,
     TaskPriority,
     TaskStatus,
+    Weekday,
 )
 from dto.tasks import (
     AddTask,
@@ -62,6 +64,22 @@ async def max_generated_instance_date(test_engine: AsyncEngine, recurrence_id):
             {"recurrence_id": recurrence_id},
         )
         return result.scalar_one()
+
+
+async def generated_instance_dates(
+    test_engine: AsyncEngine, recurrence_id: UUID
+) -> list[tuple[int, date]]:
+    async with test_engine.connect() as conn:
+        result = await conn.execute(
+            text("""
+                SELECT sequence_no, planned_date
+                FROM task_recurrence_instance
+                WHERE series_id = :recurrence_id AND deleted_at IS NULL
+                ORDER BY sequence_no
+            """),
+            {"recurrence_id": recurrence_id},
+        )
+        return [(row.sequence_no, row.planned_date) for row in result]
 
 
 async def recurrence_template_tag_link_count(
@@ -152,6 +170,34 @@ async def delete_generated_occurrence(
         await conn.execute(text("DELETE FROM task WHERE task_id = :task_id"), {"task_id": task_id})
 
 
+def scheduled_recurrence(
+    *,
+    frequency: RecurrenceFrequency,
+    schedule: Schedule,
+    interval: int = 1,
+    repeat_until: datetime | None = None,
+    occurrences_limit: int | None = None,
+) -> AddTaskRecurrence:
+    starts_at = schedule.starts_at
+    return AddTaskRecurrence(
+        frequency=frequency,
+        anchor_date=starts_at.date(),
+        default_time=starts_at.time(),
+        default_duration=schedule.ends_at - starts_at,
+        interval=interval,
+        weekdays=(Weekday(starts_at.isoweekday()),)
+        if frequency == RecurrenceFrequency.WEEKLY
+        else (),
+        month_rule=(
+            RecurrenceMonthRule(month_day=starts_at.day)
+            if frequency == RecurrenceFrequency.MONTHLY
+            else None
+        ),
+        repeat_until=repeat_until.date() if repeat_until is not None else None,
+        occurrences_limit=occurrences_limit,
+    )
+
+
 async def create_task_recurrence_rule(
     task_service: TaskService,
     user_id,
@@ -190,7 +236,7 @@ async def create_recurrence_template(
             priority=priority,
             tag_ids=tag_ids,
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=frequency,
                     occurrences_limit=1,
                     schedule=Schedule(
@@ -223,7 +269,7 @@ async def create_materialization_conflict(
         task_service,
         user_id,
         f"{TEST_TITLE_PREFIX}{title}",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=first_schedule,
             occurrences_limit=3,
@@ -249,6 +295,382 @@ async def create_materialization_conflict(
         ),
     )
     return recurrence, conflict_schedule, blocker
+
+
+@pytest.mark.asyncio
+async def test_recurrence_rule_configuration_round_trips_without_loss(
+    task_service: TaskService,
+) -> None:
+    weekly = AddTaskRecurrence(
+        frequency=RecurrenceFrequency.WEEKLY,
+        anchor_date=datetime(2099, 8, 3).date(),
+        default_time=datetime(2099, 8, 3, 9).time(),
+        interval=2,
+        weekdays=(Weekday.MONDAY, Weekday.THURSDAY),
+        occurrences_limit=4,
+    )
+    monthly = AddTaskRecurrence(
+        frequency=RecurrenceFrequency.MONTHLY,
+        anchor_date=datetime(2099, 8, 4).date(),
+        default_time=datetime(2099, 8, 4, 11).time(),
+        month_rule=RecurrenceMonthRule(
+            week_of_month=-1,
+            weekday=Weekday.FRIDAY,
+        ),
+        repeat_until=datetime(2100, 8, 4).date(),
+    )
+
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}rich-rule-round-trip",
+            rules=(weekly, monthly),
+        ),
+    )
+    rules = await task_service.get_task_recurrence_rules(
+        TEST_USER_ID,
+        template.template_id,
+    )
+
+    assert [rule.frequency for rule in rules] == [
+        RecurrenceFrequency.WEEKLY,
+        RecurrenceFrequency.MONTHLY,
+    ]
+    assert rules[0].weekdays == weekly.weekdays
+    assert rules[1].month_rule == monthly.month_rule
+    assert rules[1].repeat_until == monthly.repeat_until
+
+
+@pytest.mark.asyncio
+async def test_deadline_only_recurrence_materializes_tasks_without_schedules(
+    task_service: TaskService,
+) -> None:
+    anchor = datetime(2099, 8, 10, 9, 30)
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}deadline-only-recurrence",
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    anchor_date=anchor.date(),
+                    default_time=anchor.time(),
+                    occurrences_limit=2,
+                ),
+            ),
+        ),
+    )
+    tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(search_text=template.title),
+    )
+
+    assert [task.due_at for task in tasks.tasks] == [anchor, anchor + timedelta(days=1)]
+    assert all(task.schedule is None for task in tasks.tasks)
+    assert template.rules[0].schedule is None
+
+
+@pytest.mark.asyncio
+async def test_recurrence_update_can_add_and_remove_future_schedules(
+    task_service: TaskService,
+) -> None:
+    anchor = datetime(2099, 8, 20, 8, 0)
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}toggle-recurrence-duration",
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    anchor_date=anchor.date(),
+                    default_time=anchor.time(),
+                    occurrences_limit=2,
+                ),
+            ),
+        ),
+    )
+    recurrence = template.rules[0]
+
+    scheduled_rule = await task_service.update_task_recurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        UpdateTaskRecurrence(
+            anchor_date=anchor.date(),
+            default_time=anchor.time(),
+            default_duration=timedelta(minutes=45),
+            occurrences_limit=2,
+        ),
+    )
+    scheduled_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(search_text=template.title),
+    )
+
+    assert scheduled_rule.frequency == recurrence.frequency
+    assert all(task.schedule is not None for task in scheduled_tasks.tasks)
+    assert [task.due_at for task in scheduled_tasks.tasks] == [
+        anchor + timedelta(minutes=45),
+        anchor + timedelta(days=1, minutes=45),
+    ]
+
+    deadline_rule = await task_service.update_task_recurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        UpdateTaskRecurrence(
+            anchor_date=anchor.date(),
+            default_time=anchor.time(),
+            default_duration=None,
+            occurrences_limit=2,
+        ),
+    )
+    deadline_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(search_text=template.title),
+    )
+
+    assert deadline_rule.default_duration is None
+    assert all(task.schedule is None for task in deadline_tasks.tasks)
+    assert [task.due_at for task in deadline_tasks.tasks] == [
+        anchor,
+        anchor + timedelta(days=1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_weekly_recurrence_materializes_each_selected_weekday(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+) -> None:
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}weekly-calendar-generation",
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.WEEKLY,
+            anchor_date=datetime(2099, 8, 3).date(),
+            default_time=datetime(2099, 8, 3, 9).time(),
+            interval=2,
+            weekdays=(Weekday.MONDAY, Weekday.THURSDAY),
+            occurrences_limit=5,
+        ),
+    )
+
+    assert await generated_instance_dates(test_engine, recurrence.recurrence_id) == [
+        (1, datetime(2099, 8, 3).date()),
+        (2, datetime(2099, 8, 6).date()),
+        (3, datetime(2099, 8, 17).date()),
+        (4, datetime(2099, 8, 20).date()),
+        (5, datetime(2099, 8, 31).date()),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_weekly_overlap_check_uses_each_selected_weekday(
+    task_service: TaskService,
+) -> None:
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=f"{TEST_TITLE_PREFIX}weekly-overlap-calendar",
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    anchor_date=datetime(2099, 8, 1).date(),
+                    default_time=datetime(2099, 8, 1, 8).time(),
+                    occurrences_limit=1,
+                ),
+            ),
+        ),
+    )
+    await task_service.create_task(
+        TEST_USER_ID,
+        AddTask(
+            title=f"{TEST_TITLE_PREFIX}weekly-overlap-blocker",
+            due_at=datetime(2099, 8, 6, 10),
+            schedule=Schedule(
+                starts_at=datetime(2099, 8, 6, 9),
+                ends_at=datetime(2099, 8, 6, 10),
+            ),
+        ),
+    )
+
+    with pytest.raises(TaskScheduleOverlap):
+        await task_service.add_task_recurrence_rule(
+            TEST_USER_ID,
+            template.template_id,
+            AddTaskRecurrence(
+                frequency=RecurrenceFrequency.WEEKLY,
+                anchor_date=datetime(2099, 8, 3).date(),
+                default_time=datetime(2099, 8, 3, 9).time(),
+                default_duration=timedelta(hours=1),
+                weekdays=(Weekday.MONDAY, Weekday.THURSDAY),
+                occurrences_limit=2,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_monthly_recurrence_skips_dates_absent_from_a_month(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+) -> None:
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}monthly-day-generation",
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.MONTHLY,
+            anchor_date=datetime(2099, 8, 31).date(),
+            default_time=datetime(2099, 8, 31, 9).time(),
+            month_rule=RecurrenceMonthRule(month_day=31),
+            occurrences_limit=4,
+        ),
+    )
+
+    assert await generated_instance_dates(test_engine, recurrence.recurrence_id) == [
+        (1, datetime(2099, 8, 31).date()),
+        (2, datetime(2099, 10, 31).date()),
+        (3, datetime(2099, 12, 31).date()),
+        (4, datetime(2100, 1, 31).date()),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("week_of_month", "expected_dates"),
+    [
+        (
+            -1,
+            [
+                datetime(2099, 8, 28).date(),
+                datetime(2099, 9, 25).date(),
+                datetime(2099, 10, 30).date(),
+            ],
+        ),
+        (
+            5,
+            [datetime(2099, 8, 31).date(), datetime(2099, 11, 30).date()],
+        ),
+    ],
+)
+async def test_monthly_ordinal_weekday_counts_only_existing_occurrences(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+    week_of_month: int,
+    expected_dates: list[date],
+) -> None:
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}monthly-ordinal-{week_of_month}",
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.MONTHLY,
+            anchor_date=expected_dates[0],
+            default_time=datetime(2099, 8, 1, 9).time(),
+            month_rule=RecurrenceMonthRule(
+                week_of_month=week_of_month,
+                weekday=Weekday.MONDAY if week_of_month == 5 else Weekday.FRIDAY,
+            ),
+            occurrences_limit=len(expected_dates),
+        ),
+    )
+
+    instances = await generated_instance_dates(test_engine, recurrence.recurrence_id)
+    assert instances == list(enumerate(expected_dates, start=1))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("anchor", "policy", "expected_date"),
+    [
+        (
+            datetime(2099, 12, 31),
+            RecurrenceBusinessDayPolicy.NEXT_BUSINESS_DAY,
+            datetime(2100, 2, 1).date(),
+        ),
+        (
+            datetime(2100, 4, 1),
+            RecurrenceBusinessDayPolicy.PREVIOUS_BUSINESS_DAY,
+            datetime(2100, 4, 30).date(),
+        ),
+    ],
+)
+async def test_monthly_business_day_adjustment_can_cross_month_boundary(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+    anchor: datetime,
+    policy: RecurrenceBusinessDayPolicy,
+    expected_date: date,
+) -> None:
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}monthly-business-day-{policy.value}",
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.MONTHLY,
+            anchor_date=anchor.date(),
+            default_time=anchor.time(),
+            month_rule=RecurrenceMonthRule(
+                month_day=31 if policy == RecurrenceBusinessDayPolicy.NEXT_BUSINESS_DAY else 1,
+                business_day_policy=policy,
+            ),
+            occurrences_limit=2,
+        ),
+    )
+
+    assert await generated_instance_dates(test_engine, recurrence.recurrence_id) == [
+        (1, anchor.date()),
+        (2, expected_date),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recurrence_update_preserves_completed_and_customized_instances(
+    task_service: TaskService,
+) -> None:
+    anchor = datetime(2099, 9, 20, 9)
+    title = f"{TEST_TITLE_PREFIX}safe-calendar-recalculation"
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        title,
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.DAILY,
+            anchor_date=anchor.date(),
+            default_time=anchor.time(),
+            occurrences_limit=3,
+        ),
+    )
+    original_tasks = (
+        await task_service.get_tasks(TEST_USER_ID, ListTasksFilters(search_text=title))
+    ).tasks
+    completed = await task_service.complete_task(TEST_USER_ID, original_tasks[0].task_id)
+    customized_due_at = anchor + timedelta(days=1, hours=4)
+    customized = await task_service.update_task_occurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        anchor + timedelta(days=1),
+        UpdateTaskOccurrence(due_at=customized_due_at),
+    )
+
+    await task_service.update_task_recurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        UpdateTaskRecurrence(
+            anchor_date=anchor.date(),
+            default_time=(anchor + timedelta(hours=2)).time(),
+            occurrences_limit=3,
+        ),
+    )
+    updated_tasks = (
+        await task_service.get_tasks(TEST_USER_ID, ListTasksFilters(search_text=title))
+    ).tasks
+    tasks_by_id = {task.task_id: task for task in updated_tasks}
+
+    assert tasks_by_id[completed.task_id].due_at == anchor
+    assert customized.task_id is not None
+    assert tasks_by_id[customized.task_id].due_at == customized_due_at
+    assert tasks_by_id[original_tasks[2].task_id].due_at == anchor + timedelta(days=2, hours=2)
 
 
 def scheduled_start(task: Task) -> datetime:
@@ -280,7 +702,7 @@ async def test_missing_recurrence_template_raises_template_not_found(
         await task_service.add_task_recurrence_rule(
             TEST_USER_ID,
             template_id,
-            AddTaskRecurrence(
+            scheduled_recurrence(
                 frequency=RecurrenceFrequency.DAILY,
                 schedule=schedule,
                 occurrences_limit=1,
@@ -340,7 +762,9 @@ async def test_missing_recurrence_rule_raises_rule_not_found(
                 TEST_USER_ID,
                 recurrence_id,
                 UpdateTaskRecurrence(
-                    schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+                    anchor_date=starts_at.date(),
+                    default_time=starts_at.time(),
+                    default_duration=timedelta(hours=1),
                     occurrences_limit=1,
                 ),
             )
@@ -589,7 +1013,7 @@ async def test_user_can_add_task_recurrence_and_view_occurrences(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 9, 1, 10, 0),
@@ -621,7 +1045,7 @@ async def test_user_can_add_recurrence_template_with_multiple_rules(
     task_service: TaskService,
 ) -> None:
     # Arrange
-    morning = AddTaskRecurrence(
+    morning = scheduled_recurrence(
         frequency=RecurrenceFrequency.DAILY,
         schedule=Schedule(
             starts_at=datetime(2099, 9, 1, 8, 0),
@@ -629,7 +1053,7 @@ async def test_user_can_add_recurrence_template_with_multiple_rules(
         ),
         occurrences_limit=2,
     )
-    evening = AddTaskRecurrence(
+    evening = scheduled_recurrence(
         frequency=RecurrenceFrequency.DAILY,
         schedule=Schedule(
             starts_at=datetime(2099, 9, 1, 20, 0),
@@ -677,7 +1101,7 @@ async def test_deleting_recurrence_template_preserves_completed_generated_tasks(
         AddTaskRecurrenceTemplate(
             title=title,
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(
                         starts_at=starts_at,
@@ -732,7 +1156,7 @@ async def test_recurrence_template_tags_are_copied_to_materialized_tasks(
             title=f"{TEST_TITLE_PREFIX}recurring-tagged-template",
             tag_ids=(tag.tag_id,),
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
                     occurrences_limit=2,
@@ -786,7 +1210,7 @@ async def test_recurrence_template_tags_are_returned_in_template_list(
             title=f"{TEST_TITLE_PREFIX}recurring-tagged-list-template",
             tag_ids=(first_tag.tag_id, second_tag.tag_id, first_tag.tag_id),
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
                     occurrences_limit=1,
@@ -826,7 +1250,7 @@ async def test_recurrence_template_rejects_tag_from_another_user(
                 title=f"{TEST_TITLE_PREFIX}recurring-invalid-tag-template",
                 tag_ids=(other_tag.tag_id,),
                 rules=(
-                    AddTaskRecurrence(
+                    scheduled_recurrence(
                         frequency=RecurrenceFrequency.DAILY,
                         schedule=Schedule(
                             starts_at=starts_at,
@@ -853,7 +1277,7 @@ async def test_user_can_add_tag_to_recurrence_template_and_current_active_instan
         AddTaskRecurrenceTemplate(
             title=title,
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=2)),
                     occurrences_limit=4,
@@ -918,7 +1342,7 @@ async def test_user_can_delete_tag_from_recurrence_template_and_current_active_i
             title=title,
             tag_ids=(tag.tag_id,),
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=2)),
                     occurrences_limit=4,
@@ -983,7 +1407,7 @@ async def test_adding_tag_to_recurrence_template_is_idempotent(
         AddTaskRecurrenceTemplate(
             title=f"{TEST_TITLE_PREFIX}recurring-add-tag-idempotent",
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
                     occurrences_limit=2,
@@ -1037,7 +1461,7 @@ async def test_deleting_tag_from_recurrence_template_is_idempotent(
             title=f"{TEST_TITLE_PREFIX}recurring-delete-tag-idempotent",
             tag_ids=(tag.tag_id,),
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
                     occurrences_limit=2,
@@ -1093,7 +1517,7 @@ async def test_future_recurrence_materialization_uses_added_template_tag(
         AddTaskRecurrenceTemplate(
             title=f"{TEST_TITLE_PREFIX}recurring-future-added-tag",
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
                     occurrences_limit=100,
@@ -1139,7 +1563,7 @@ async def test_future_recurrence_materialization_uses_removed_template_tag(
             title=f"{TEST_TITLE_PREFIX}recurring-future-removed-tag",
             tag_ids=(tag.tag_id,),
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
                     occurrences_limit=100,
@@ -1195,7 +1619,7 @@ async def test_future_recurrence_materialization_ignores_soft_deleted_template_t
             title=f"{TEST_TITLE_PREFIX}recurring-soft-deleted-tag",
             tag_ids=(tag.tag_id,),
             rules=(
-                AddTaskRecurrence(
+                scheduled_recurrence(
                     frequency=RecurrenceFrequency.DAILY,
                     schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
                     occurrences_limit=100,
@@ -1395,7 +1819,7 @@ async def test_free_time_accounts_for_recurring_task_occurrences(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 9, 5, 10, 0),
@@ -1439,7 +1863,7 @@ async def test_schedule_availability_accounts_for_recurring_task_occurrence(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 10, 4, 10, 0),
@@ -1476,7 +1900,7 @@ async def test_task_list_and_count_include_recurring_occurrences(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 9, 20, 10, 0),
@@ -1552,7 +1976,7 @@ async def test_task_list_filters_recurring_occurrences_by_task_fields(
             task_service,
             TEST_USER_ID,
             task.title,
-            AddTaskRecurrence(
+            scheduled_recurrence(
                 frequency=RecurrenceFrequency.DAILY,
                 schedule=Schedule(
                     starts_at=starts_at,
@@ -1597,7 +2021,7 @@ async def test_nearest_free_schedule_accounts_for_recurring_task_occurrences(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 9, 8, 10, 0),
@@ -1637,7 +2061,7 @@ async def test_user_can_reschedule_single_recurring_occurrence(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 9, 10, 10, 0),
@@ -1692,7 +2116,7 @@ async def test_rescheduled_occurrence_is_listed_in_new_window_only(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 10, 7, 10, 0),
@@ -1749,7 +2173,7 @@ async def test_user_can_cancel_single_recurring_occurrence(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 9, 15, 10, 0),
@@ -1793,7 +2217,7 @@ async def test_cancelled_recurring_occurrence_is_not_listed_as_scheduled_task(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 10, 8, 10, 0),
@@ -1860,13 +2284,32 @@ async def test_user_cannot_create_recurrence_overlapping_single_schedule(
             task_service,
             TEST_USER_ID,
             recurring_task.title,
-            AddTaskRecurrence(
+            scheduled_recurrence(
                 frequency=RecurrenceFrequency.DAILY,
                 schedule=Schedule(
                     starts_at=datetime(2099, 10, 9, 10, 30),
                     ends_at=datetime(2099, 10, 9, 11, 30),
                 ),
                 occurrences_limit=1,
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_create_rule_with_overlapping_occurrences(
+    task_service: TaskService,
+) -> None:
+    with pytest.raises(TaskScheduleOverlap):
+        await create_task_recurrence_rule(
+            task_service,
+            TEST_USER_ID,
+            f"{TEST_TITLE_PREFIX}self-overlapping-recurrence",
+            AddTaskRecurrence(
+                frequency=RecurrenceFrequency.DAILY,
+                anchor_date=datetime(2099, 10, 9).date(),
+                default_time=datetime(2099, 10, 9, 10).time(),
+                default_duration=timedelta(hours=25),
+                occurrences_limit=2,
             ),
         )
 
@@ -1894,7 +2337,7 @@ async def test_user_cannot_create_recurrence_overlapping_another_recurrence(
         task_service,
         TEST_USER_ID,
         first.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 10, 10, 10, 0),
@@ -1910,7 +2353,7 @@ async def test_user_cannot_create_recurrence_overlapping_another_recurrence(
             task_service,
             TEST_USER_ID,
             second.title,
-            AddTaskRecurrence(
+            scheduled_recurrence(
                 frequency=RecurrenceFrequency.DAILY,
                 schedule=Schedule(
                     starts_at=datetime(2099, 10, 10, 10, 30),
@@ -1934,7 +2377,7 @@ async def test_deleted_recurrence_rule_preserves_only_completed_instances(
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}deleted-recurring",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=schedule,
             occurrences_limit=2,
@@ -1992,7 +2435,7 @@ async def test_recurring_occurrences_are_isolated_between_users(
         task_service,
         TEST_OTHER_USER_ID,
         other_task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=schedule,
             occurrences_limit=1,
@@ -2044,7 +2487,7 @@ async def test_daily_recurrence_materialization_is_capped_at_90_days(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 10, 0),
@@ -2083,7 +2526,7 @@ async def test_monthly_recurrence_materialization_is_capped_at_one_year(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.MONTHLY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 10, 0),
@@ -2115,7 +2558,7 @@ async def test_materialize_recurrence_instances_for_all_owners_uses_only_owners_
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}recurring-owner-needs-tail",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 10, 0),
@@ -2127,7 +2570,7 @@ async def test_materialize_recurrence_instances_for_all_owners_uses_only_owners_
         task_service,
         TEST_OTHER_USER_ID,
         f"{TEST_TITLE_PREFIX}recurring-owner-finished-by-count",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 15, 0),
@@ -2156,7 +2599,7 @@ async def test_materialize_recurrence_instances_for_all_owners_skips_not_due_ser
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}recurring-owner-not-due",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 10, 0),
@@ -2180,7 +2623,7 @@ async def test_materialize_recurrence_instances_for_all_owners_skips_deleted_rec
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}recurring-owner-deleted",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 10, 0),
@@ -2205,7 +2648,7 @@ async def test_materialize_recurrence_instances_for_all_owners_skips_finished_ge
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}recurring-owner-stopped",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 10, 0),
@@ -2235,7 +2678,7 @@ async def test_materialization_conflicts_are_returned_with_due_filtered_tasks(
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}recurring-conflict",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 10, 0),
@@ -2454,7 +2897,7 @@ async def test_materialization_creates_one_conflict_for_multiple_blocking_tasks(
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}recurring-conflict-multiple-blockers",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 2, 25, 10, 0),
@@ -2549,7 +2992,7 @@ async def test_user_can_skip_recurring_occurrence(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 11, 1, 10, 0),
@@ -2591,7 +3034,7 @@ async def test_user_can_update_recurrence_series_schedule(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 11, 2, 10, 0),
@@ -2610,10 +3053,9 @@ async def test_user_can_update_recurrence_series_schedule(
         TEST_USER_ID,
         recurrence.recurrence_id,
         UpdateTaskRecurrence(
-            schedule=Schedule(
-                starts_at=datetime(2099, 11, 2, 12, 0),
-                ends_at=datetime(2099, 11, 2, 13, 0),
-            ),
+            anchor_date=datetime(2099, 11, 2).date(),
+            default_time=datetime(2099, 11, 2, 12).time(),
+            default_duration=timedelta(hours=1),
             occurrences_limit=2,
         ),
     )
@@ -2648,7 +3090,7 @@ async def test_user_can_stop_recurrence_series_from_date(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 11, 5, 10, 0),
@@ -2690,7 +3132,7 @@ async def test_extending_stopped_recurrence_restores_only_matching_instances(
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}extend-stopped-recurrence",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
         ),
@@ -2711,8 +3153,10 @@ async def test_extending_stopped_recurrence_restores_only_matching_instances(
         TEST_USER_ID,
         recurrence.recurrence_id,
         UpdateTaskRecurrence(
-            schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
-            repeat_until=starts_at + timedelta(days=4),
+            anchor_date=starts_at.date(),
+            default_time=starts_at.time(),
+            default_duration=timedelta(hours=1),
+            repeat_until=(starts_at + timedelta(days=4)).date(),
         ),
     )
     tasks = await task_service.get_tasks(
@@ -2744,7 +3188,7 @@ async def test_extending_old_recurrence_materializes_current_instances(
         task_service,
         TEST_USER_ID,
         f"{TEST_TITLE_PREFIX}extend-old-recurrence",
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=original_start,
@@ -2757,11 +3201,10 @@ async def test_extending_old_recurrence_materializes_current_instances(
         TEST_USER_ID,
         recurrence.recurrence_id,
         UpdateTaskRecurrence(
-            schedule=Schedule(
-                starts_at=original_start,
-                ends_at=original_start + timedelta(hours=1),
-            ),
-            repeat_until=current_start + timedelta(days=2),
+            anchor_date=original_start.date(),
+            default_time=original_start.time(),
+            default_duration=timedelta(hours=1),
+            repeat_until=(current_start + timedelta(days=2)).date(),
         ),
     )
     tasks = await task_service.get_tasks(
@@ -2795,7 +3238,7 @@ async def test_user_can_override_future_not_materialized_occurrence(
         task_service,
         TEST_USER_ID,
         task.title,
-        AddTaskRecurrence(
+        scheduled_recurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=Schedule(
                 starts_at=datetime(2099, 1, 1, 10, 0),

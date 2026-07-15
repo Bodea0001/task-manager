@@ -1,8 +1,16 @@
 from uuid import UUID
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from dataclasses import dataclass
 
-from domain.value_objects.tasks import RecurrenceFrequency, Schedule, Task, TaskPriority, TaskStatus
+from domain.value_objects.tasks import (
+    Weekday,
+    Schedule,
+    Task,
+    TaskPriority,
+    TaskStatus,
+    RecurrenceFrequency,
+    RecurrenceMonthRule,
+)
 
 
 TITLE_MAX_LENGTH = 250
@@ -139,34 +147,52 @@ class UpdateTaskRecurrenceTemplate:
         _validate_description(self.description)
 
 
-@dataclass(frozen=True, slots=True)
-class AddTaskRecurrence:
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _TaskRecurrenceData:
     frequency: RecurrenceFrequency
-    schedule: Schedule
+    anchor_date: date
+    default_time: time
     interval: int = 1
-    repeat_until: datetime | None = None
+    default_duration: timedelta | None = None
+    weekdays: tuple[Weekday, ...] = ()
+    month_rule: RecurrenceMonthRule | None = None
+    repeat_until: date | None = None
     occurrences_limit: int | None = None
 
     def __post_init__(self) -> None:
-        _validate_schedule(self.schedule)
         _validate_recurrence(
+            frequency=self.frequency,
             interval=self.interval,
-            schedule=self.schedule,
+            anchor_date=self.anchor_date,
+            default_time=self.default_time,
+            default_duration=self.default_duration,
+            weekdays=self.weekdays,
+            month_rule=self.month_rule,
             repeat_until=self.repeat_until,
             occurrences_limit=self.occurrences_limit,
         )
 
 
 @dataclass(frozen=True, slots=True)
+class AddTaskRecurrence(_TaskRecurrenceData):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
 class UpdateTaskRecurrence:
-    schedule: Schedule
-    repeat_until: datetime | None = None
+    anchor_date: date
+    default_time: time
+    default_duration: timedelta | None = None
+    repeat_until: date | None = None
     occurrences_limit: int | None = None
 
     def __post_init__(self) -> None:
-        _validate_schedule(self.schedule)
+        if self.default_time.tzinfo is not None:
+            raise ValueError("default_time must not include a timezone offset")
+        if self.default_duration is not None and self.default_duration <= timedelta(0):
+            raise ValueError("default_duration must be positive")
         _validate_recurrence_end(
-            schedule=self.schedule,
+            anchor_date=self.anchor_date,
             repeat_until=self.repeat_until,
             occurrences_limit=self.occurrences_limit,
         )
@@ -245,16 +271,43 @@ def _validate_schedule(schedule: Schedule | None) -> None:
 
 def _validate_recurrence(
     *,
+    frequency: RecurrenceFrequency,
     interval: int,
-    schedule: Schedule,
-    repeat_until: datetime | None,
+    anchor_date: date,
+    default_time: time,
+    default_duration: timedelta | None,
+    weekdays: tuple[Weekday, ...],
+    month_rule: RecurrenceMonthRule | None,
+    repeat_until: date | None,
     occurrences_limit: int | None,
 ) -> None:
     if interval < 1:
         raise ValueError("recurrence interval must be positive")
 
+    if default_time.tzinfo is not None:
+        raise ValueError("default_time must not include a timezone offset")
+
+    if default_duration is not None and default_duration <= timedelta(0):
+        raise ValueError("default_duration must be positive")
+
+    normalized_weekdays = tuple(dict.fromkeys(weekdays))
+    if normalized_weekdays != weekdays:
+        raise ValueError("recurrence weekdays must be unique")
+
+    if frequency == RecurrenceFrequency.WEEKLY and not weekdays:
+        raise ValueError("weekly recurrence requires at least one weekday")
+    if frequency != RecurrenceFrequency.WEEKLY and weekdays:
+        raise ValueError("weekdays are only supported for weekly recurrence")
+
+    if frequency == RecurrenceFrequency.MONTHLY and month_rule is None:
+        raise ValueError("monthly recurrence requires a month rule")
+    if frequency != RecurrenceFrequency.MONTHLY and month_rule is not None:
+        raise ValueError("month_rule is only supported for monthly recurrence")
+    if month_rule is not None:
+        _validate_month_rule(month_rule)
+
     _validate_recurrence_end(
-        schedule=schedule,
+        anchor_date=anchor_date,
         repeat_until=repeat_until,
         occurrences_limit=occurrences_limit,
     )
@@ -262,15 +315,30 @@ def _validate_recurrence(
 
 def _validate_recurrence_end(
     *,
-    schedule: Schedule,
-    repeat_until: datetime | None,
+    anchor_date: date,
+    repeat_until: date | None,
     occurrences_limit: int | None,
 ) -> None:
     if repeat_until is not None and occurrences_limit is not None:
         raise ValueError("repeat_until and occurrences_limit cannot both be provided")
 
-    if repeat_until is not None and repeat_until < schedule.starts_at:
+    if repeat_until is not None and repeat_until < anchor_date:
         raise ValueError("repeat_until cannot be earlier than recurrence start")
 
     if occurrences_limit is not None and occurrences_limit < 1:
         raise ValueError("occurrences_limit must be positive")
+
+
+def _validate_month_rule(rule: RecurrenceMonthRule) -> None:
+    uses_month_day = rule.month_day is not None
+    uses_ordinal_weekday = rule.week_of_month is not None or rule.weekday is not None
+
+    if uses_month_day == uses_ordinal_weekday:
+        raise ValueError("month rule must use either month_day or an ordinal weekday")
+    if uses_month_day and rule.month_day is not None and not 1 <= rule.month_day <= 31:
+        raise ValueError("month_day must be between 1 and 31")
+    if uses_ordinal_weekday:
+        if rule.week_of_month is None or rule.weekday is None:
+            raise ValueError("ordinal month rule requires week_of_month and weekday")
+        if rule.week_of_month not in {-1, 1, 2, 3, 4, 5}:
+            raise ValueError("week_of_month must be -1 or between 1 and 5")
