@@ -18,6 +18,7 @@ class AuditEventType(StrEnum):
     TASK_TAG_REMOVED = "task.tag_removed"
     TASK_RECURRENCE_TEMPLATE_TAG_ADDED = "task.recurrence_template_tag_added"
     TASK_RECURRENCE_TEMPLATE_TAG_REMOVED = "task.recurrence_template_tag_removed"
+    TASK_RECURRENCE_TEMPLATE_DELETED = "task.recurrence_template_deleted"
     TASK_SCHEDULE_DELETED = "task.schedule_deleted"
     TASK_RECURRENCE_ADDED = "task.recurrence_added"
     TASK_RECURRENCE_UPDATED = "task.recurrence_updated"

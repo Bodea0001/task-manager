@@ -314,6 +314,16 @@ class TaskService:
             )
             return template
 
+    async def delete_task_recurrence_template(self, user_id: UUID, template_id: UUID) -> None:
+        async with self.uow() as uow:
+            await uow.task.delete_task_recurrence_template(user_id, template_id)
+            await self._record_task_event(
+                uow,
+                user_id=user_id,
+                task_id=template_id,
+                event_type=AuditEventType.TASK_RECURRENCE_TEMPLATE_DELETED,
+            )
+
     # Recurrence rules
 
     async def get_task_recurrence_rules(

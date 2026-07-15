@@ -127,6 +127,11 @@ class RecurrenceWorkflowService:
     async def delete_task_recurrence(self, user_id: UUID, recurrence_id: UUID) -> None:
         del self.rules[recurrence_id]
 
+    async def delete_task_recurrence_template(self, user_id: UUID, template_id: UUID) -> None:
+        template = self.templates.pop(template_id)
+        for rule in template.rules:
+            self.rules.pop(rule.recurrence_id, None)
+
 
 def _authenticated_user() -> User:
     return User(
@@ -206,6 +211,7 @@ async def test_user_can_manage_recurring_work_through_http() -> None:
         )
         deleted = await client.delete(f"/api/v1/recurrence-rules/{recurrence_id}")
         rules_after_delete = await client.get(f"/api/v1/recurrence-templates/{template_id}/rules")
+        deleted_template = await client.delete(f"/api/v1/recurrence-templates/{template_id}")
 
     assert created.status_code == 201
     assert created.json()["title"] == "Review weekly metrics"
@@ -222,6 +228,7 @@ async def test_user_can_manage_recurring_work_through_http() -> None:
     assert skipped_occurrence.json()["is_cancelled"] is True
     assert deleted.status_code == 204
     assert rules_after_delete.json()["rules"] == []
+    assert deleted_template.status_code == 204
 
 
 @pytest.mark.asyncio

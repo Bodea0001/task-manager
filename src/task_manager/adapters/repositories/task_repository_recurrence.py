@@ -14,6 +14,8 @@ from sqlalchemy import (
     bindparam,
 )
 from sqlalchemy.types import Uuid, Integer, TIMESTAMP
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import CTE
 from sqlalchemy.dialects.postgresql import ARRAY, insert as pg_insert
 
 import exceptions as app_exc
@@ -704,6 +706,71 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         return result.scalar_one()
 
     @translate_repository_errors(not_found=app_exc.RecurrenceTemplateNotFound)
+    async def delete_task_recurrence_template(self, user_id: UUID, template_id: UUID) -> None:
+        now = func.now()
+        owner_template = self._owned_recurrence_template(user_id, template_id).cte("owner_template")
+        series_ids = select(TaskRecurrenceSeriesModel.series_id).where(
+            TaskRecurrenceSeriesModel.template_id.in_(select(owner_template.c.template_id)),
+            TaskRecurrenceSeriesModel.deleted_at.is_(None),
+        )
+        removable_instances = self._removable_recurrence_instances(
+            user_id=user_id,
+            series_condition=TaskRecurrenceInstanceModel.series_id.in_(series_ids),
+            cte_name="removable_recurrence_template_instances",
+        )
+        deleted_tasks = (
+            update(TaskModel)
+            .values(deleted_at=now)
+            .where(
+                TaskModel.creator_id == user_id,
+                TaskModel.task_id.in_(select(removable_instances.c.task_id)),
+                self._task_is_not_deleted(),
+            )
+            .returning(TaskModel.task_id)
+            .cte("deleted_recurrence_template_tasks")
+        )
+        deleted_instances = (
+            update(TaskRecurrenceInstanceModel)
+            .values(deleted_at=now)
+            .where(
+                TaskRecurrenceInstanceModel.instance_id.in_(
+                    select(removable_instances.c.instance_id)
+                ),
+                TaskRecurrenceInstanceModel.deleted_at.is_(None),
+            )
+            .returning(TaskRecurrenceInstanceModel.instance_id)
+            .cte("deleted_recurrence_template_instances")
+        )
+        deleted_series = (
+            update(TaskRecurrenceSeriesModel)
+            .values(deleted_at=now)
+            .where(
+                TaskRecurrenceSeriesModel.template_id.in_(select(owner_template.c.template_id)),
+                TaskRecurrenceSeriesModel.deleted_at.is_(None),
+            )
+            .returning(TaskRecurrenceSeriesModel.series_id)
+            .cte("deleted_recurrence_template_series")
+        )
+        deleted_template = (
+            update(TaskRecurrenceTemplateModel)
+            .values(deleted_at=now)
+            .where(
+                TaskRecurrenceTemplateModel.template_id.in_(select(owner_template.c.template_id)),
+                TaskRecurrenceTemplateModel.deleted_at.is_(None),
+            )
+            .returning(TaskRecurrenceTemplateModel.template_id)
+            .cte("deleted_recurrence_template")
+        )
+        result = await self.session.execute(
+            select(select(1).select_from(deleted_template).exists())
+            .add_cte(deleted_tasks)
+            .add_cte(deleted_instances)
+            .add_cte(deleted_series)
+        )
+        if not result.scalar_one():
+            raise app_exc.RecurrenceTemplateNotFound
+
+    @translate_repository_errors(not_found=app_exc.RecurrenceTemplateNotFound)
     async def add_tag_to_task_recurrence_template(
         self, user_id: UUID, template_id: UUID, tag_id: UUID
     ) -> TaskRecurrenceTemplate:
@@ -925,16 +992,19 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
     async def delete_task_recurrence(self, user_id: UUID, recurrence_id: UUID) -> None:
         now = func.now()
         owner_series = self._owned_recurrence_series(user_id, recurrence_id).cte("owner_series")
-        task_ids = select(TaskRecurrenceInstanceModel.task_id).where(
-            TaskRecurrenceInstanceModel.series_id.in_(select(owner_series.c.series_id)),
-            TaskRecurrenceInstanceModel.deleted_at.is_(None),
+        removable_instances = self._removable_recurrence_instances(
+            user_id=user_id,
+            series_condition=TaskRecurrenceInstanceModel.series_id.in_(
+                select(owner_series.c.series_id)
+            ),
+            cte_name="removable_recurrence_instances",
         )
         deleted_tasks = (
             update(TaskModel)
             .values(deleted_at=now)
             .where(
                 TaskModel.creator_id == user_id,
-                TaskModel.task_id.in_(task_ids),
+                TaskModel.task_id.in_(select(removable_instances.c.task_id)),
                 self._task_is_not_deleted(),
             )
             .returning(TaskModel.task_id)
@@ -944,7 +1014,9 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             update(TaskRecurrenceInstanceModel)
             .values(deleted_at=now)
             .where(
-                TaskRecurrenceInstanceModel.series_id.in_(select(owner_series.c.series_id)),
+                TaskRecurrenceInstanceModel.instance_id.in_(
+                    select(removable_instances.c.instance_id)
+                ),
                 TaskRecurrenceInstanceModel.deleted_at.is_(None),
             )
             .returning(TaskRecurrenceInstanceModel.instance_id)
@@ -1361,6 +1433,30 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 TaskModel.task_id.in_(task_ids),
                 self._task_is_not_deleted(),
             )
+        )
+
+    @classmethod
+    def _removable_recurrence_instances(
+        cls,
+        *,
+        user_id: UUID,
+        series_condition: ColumnElement[bool],
+        cte_name: str,
+    ) -> CTE:
+        return (
+            select(
+                TaskRecurrenceInstanceModel.instance_id,
+                TaskRecurrenceInstanceModel.task_id,
+            )
+            .join(TaskModel, TaskModel.task_id == TaskRecurrenceInstanceModel.task_id)
+            .where(
+                series_condition,
+                TaskRecurrenceInstanceModel.deleted_at.is_(None),
+                TaskModel.creator_id == user_id,
+                TaskModel.status != TaskStatus.COMPLETED,
+                cls._task_is_not_deleted(),
+            )
+            .cte(cte_name)
         )
 
     @staticmethod

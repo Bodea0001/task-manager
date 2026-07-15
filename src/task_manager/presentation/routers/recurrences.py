@@ -73,6 +73,19 @@ async def get_recurrence_template(
     return RecurrenceTemplateResponse.from_domain(template)
 
 
+@router.delete(
+    "/recurrence-templates/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_recurrence_template(
+    template_id: UUID,
+    current_user: CurrentUserDependency,
+    task_service: TaskServiceDependency,
+) -> Response:
+    await task_service.delete_task_recurrence_template(current_user.user_id, template_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get(
     "/recurrence-templates/{template_id}/history",
     response_model=AuditEventListResponse,

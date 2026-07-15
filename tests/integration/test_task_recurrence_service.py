@@ -287,6 +287,9 @@ async def test_missing_recurrence_template_raises_template_not_found(
             ),
         )
 
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.delete_task_recurrence_template(TEST_USER_ID, template_id)
+
 
 @pytest.mark.asyncio
 async def test_foreign_recurrence_template_raises_template_not_found(
@@ -303,6 +306,14 @@ async def test_foreign_recurrence_template_raises_template_not_found(
 
     with pytest.raises(RecurrenceTemplateNotFound):
         await task_service.get_task_recurrence_rules(TEST_USER_ID, template.template_id)
+
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.delete_task_recurrence_template(TEST_USER_ID, template.template_id)
+
+    assert (
+        await task_service.get_task_recurrence_template(TEST_OTHER_USER_ID, template.template_id)
+        == template
+    )
 
 
 @pytest.mark.asyncio
@@ -653,6 +664,55 @@ async def test_user_can_add_recurrence_template_with_multiple_rules(
         Schedule(starts_at=datetime(2099, 9, 2, 8, 0), ends_at=datetime(2099, 9, 2, 8, 30)),
         Schedule(starts_at=datetime(2099, 9, 2, 20, 0), ends_at=datetime(2099, 9, 2, 20, 30)),
     ]
+
+
+@pytest.mark.asyncio
+async def test_deleting_recurrence_template_preserves_completed_generated_tasks(
+    task_service: TaskService,
+) -> None:
+    starts_at = datetime(2099, 9, 5, 8, 0)
+    title = f"{TEST_TITLE_PREFIX}delete-recurrence-template"
+    template = await task_service.add_task_recurrence_template(
+        TEST_USER_ID,
+        AddTaskRecurrenceTemplate(
+            title=title,
+            rules=(
+                AddTaskRecurrence(
+                    frequency=RecurrenceFrequency.DAILY,
+                    schedule=Schedule(
+                        starts_at=starts_at,
+                        ends_at=starts_at + timedelta(minutes=30),
+                    ),
+                    occurrences_limit=2,
+                ),
+            ),
+        ),
+    )
+    generated_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(search_text=title),
+    )
+    completed_task = await task_service.complete_task(
+        TEST_USER_ID,
+        generated_tasks.tasks[0].task_id,
+    )
+
+    await task_service.delete_task_recurrence_template(
+        TEST_USER_ID,
+        template.template_id,
+    )
+
+    with pytest.raises(RecurrenceTemplateNotFound):
+        await task_service.get_task_recurrence_template(TEST_USER_ID, template.template_id)
+
+    templates = await task_service.get_task_recurrence_templates(TEST_USER_ID)
+    tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(search_text=title),
+    )
+    assert all(item.template_id != template.template_id for item in templates)
+    assert [task.task_id for task in tasks.tasks] == [completed_task.task_id]
+    assert tasks.tasks[0].status == TaskStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -1862,7 +1922,7 @@ async def test_user_cannot_create_recurrence_overlapping_another_recurrence(
 
 
 @pytest.mark.asyncio
-async def test_deleted_recurrence_rule_does_not_block_or_appear_in_scheduled_list(
+async def test_deleted_recurrence_rule_preserves_only_completed_instances(
     task_service: TaskService,
 ) -> None:
     # Arrange
@@ -1877,21 +1937,39 @@ async def test_deleted_recurrence_rule_does_not_block_or_appear_in_scheduled_lis
         AddTaskRecurrence(
             frequency=RecurrenceFrequency.DAILY,
             schedule=schedule,
-            occurrences_limit=1,
+            occurrences_limit=2,
         ),
+    )
+    generated_tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(search_text=f"{TEST_TITLE_PREFIX}deleted-recurring"),
+    )
+    completed_task = await task_service.complete_task(
+        TEST_USER_ID,
+        generated_tasks.tasks[0].task_id,
+    )
+    unfinished_schedule = Schedule(
+        starts_at=schedule.starts_at + timedelta(days=1),
+        ends_at=schedule.ends_at + timedelta(days=1),
     )
 
     # Act
     await task_service.delete_task_recurrence(TEST_USER_ID, recurrence.recurrence_id)
-    free_time = await task_service.get_free_time(TEST_USER_ID, [schedule])
+    free_time = await task_service.get_free_time(TEST_USER_ID, [unfinished_schedule])
     tasks = await task_service.get_tasks(
         TEST_USER_ID,
-        ListTasksFilters(starts_from=schedule.starts_at, ends_to=schedule.ends_at),
+        ListTasksFilters(search_text=f"{TEST_TITLE_PREFIX}deleted-recurring"),
     )
 
     # Assert
-    assert free_time == [FreeTime(starts_at=schedule.starts_at, ends_at=schedule.ends_at)]
-    assert tasks.tasks == []
+    assert free_time == [
+        FreeTime(
+            starts_at=unfinished_schedule.starts_at,
+            ends_at=unfinished_schedule.ends_at,
+        )
+    ]
+    assert [task.task_id for task in tasks.tasks] == [completed_task.task_id]
+    assert tasks.tasks[0].status == TaskStatus.COMPLETED
 
 
 @pytest.mark.asyncio
