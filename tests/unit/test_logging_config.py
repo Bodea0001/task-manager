@@ -51,3 +51,21 @@ def test_json_log_formatter_keeps_unstructured_messages() -> None:
 
     assert payload["message"] == "Initializing AgentApplication"
     assert "event" not in payload
+
+
+def test_json_log_formatter_keeps_message_when_exception_info_is_not_a_tuple() -> None:
+    record = logging.LogRecord(
+        name="asyncio",
+        level=logging.ERROR,
+        pathname="/python/asyncio/base_events.py",
+        lineno=1785,
+        msg="Task was destroyed but it is pending!",
+        args=(),
+        exc_info=None,
+    )
+    record.exc_info = True  # type: ignore[assignment]
+
+    payload = json.loads(JSONLogFormatter().format(record))
+
+    assert payload["message"] == "Task was destroyed but it is pending!"
+    assert "exception" not in payload
