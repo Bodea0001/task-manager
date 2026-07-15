@@ -73,6 +73,12 @@ class AuthService:
             user = await uow.user.get_user(session.user_id)
             return await self._issue_tokens(uow, user)
 
+    async def revoke_refresh_token(self, refresh_token: str) -> None:
+        token_hash = hash_refresh_token(refresh_token)
+
+        async with self.uow() as uow:
+            await uow.user.revoke_refresh_token(token_hash)
+
     async def _issue_tokens(self, uow, user: User) -> AuthTokens:
         access_token = self.token_service.create_access_token(user.user_id)
         refresh_token = create_refresh_token()

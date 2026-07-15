@@ -38,6 +38,9 @@ class SuccessfulAuthService:
     async def refresh(self, refresh_token: str) -> AuthTokens:
         return AuthTokens(access_token="new-access-token", refresh_token="new-refresh-token")
 
+    async def revoke_refresh_token(self, refresh_token: str) -> None:
+        return None
+
     async def get_current_user(self, access_token: str) -> User:
         raise NotImplementedError
 
@@ -161,6 +164,25 @@ async def test_registration_returns_authentication_tokens() -> None:
         "refresh_token": "refresh-token",
         "token_type": "bearer",
     }
+    UUID(response.headers["X-Request-ID"])
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_refresh_session_without_response_content() -> None:
+    app = create_app()
+    app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, SuccessfulAuthService())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/auth/logout",
+            json={"refresh_token": "refresh-token"},
+        )
+
+    assert response.status_code == 204
+    assert response.content == b""
     UUID(response.headers["X-Request-ID"])
 
 

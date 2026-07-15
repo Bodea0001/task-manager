@@ -169,7 +169,8 @@ Implemented product areas:
   skipped dates, stopping, deletion, and paginated listing.
 - Tags and context: tag creation, renaming, removal, task tagging, contextual
   lookup, and change history.
-- Users and access: user accounts, authentication, and per-user data access.
+- Users and access: user accounts, authentication, session rotation and logout,
+  and per-user data access.
 - Chat sessions: titled per-user conversations with paginated, persistent
   user-visible message history and strict ownership boundaries.
 - Assistant agent: natural-language task-management requests, safe service-layer

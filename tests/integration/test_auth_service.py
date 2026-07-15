@@ -141,6 +141,27 @@ async def test_user_can_refresh_tokens(auth_service: AuthService) -> None:
 
 
 @pytest.mark.asyncio
+async def test_user_can_revoke_refresh_session(auth_service: AuthService) -> None:
+    # Arrange
+    tokens = await auth_service.register(
+        RegisterUser(
+            email="logout@example.com",
+            password="correct-password",
+            first_name="Logout",
+            last_name="User",
+        )
+    )
+
+    # Act
+    await auth_service.revoke_refresh_token(tokens.refresh_token)
+    await auth_service.revoke_refresh_token(tokens.refresh_token)
+
+    # Assert
+    with pytest.raises(InvalidToken):
+        await auth_service.refresh(tokens.refresh_token)
+
+
+@pytest.mark.asyncio
 async def test_malformed_refresh_token_is_rejected(auth_service: AuthService) -> None:
     # Act / Assert
     with pytest.raises(InvalidToken):

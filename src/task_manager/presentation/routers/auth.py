@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 
 from presentation.dependencies import AuthServiceDependency, capture_auth_request_metadata
 from presentation.schemas.auth import (
@@ -41,3 +41,12 @@ async def refresh_tokens(
 ) -> AuthTokensResponse:
     tokens = await auth_service.refresh(request.refresh_token.get_secret_value())
     return AuthTokensResponse.from_domain(tokens)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    request: RefreshTokenRequest,
+    auth_service: AuthServiceDependency,
+) -> Response:
+    await auth_service.revoke_refresh_token(request.refresh_token.get_secret_value())
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
