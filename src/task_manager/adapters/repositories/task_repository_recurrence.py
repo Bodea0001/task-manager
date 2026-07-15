@@ -886,7 +886,8 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             from_datetime=datetime.combine(data.schedule.starts_at.date(), time.min),
         )
         await self.materialize_recurrence_instances(
-            user_id, (self._initial_materialization_window(data, frequency=recurrence.frequency),)
+            user_id,
+            (self._continuing_materialization_window(data, frequency=recurrence.frequency),),
         )
         return recurrence
 
@@ -1007,7 +1008,9 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                             )::date
                         END AS planned_date,
                         task_recurrence_series.default_time,
-                        task_recurrence_series.default_duration
+                        task_recurrence_series.default_duration,
+                        task_recurrence_series.repeat_until,
+                        task_recurrence_series.max_occurrences
                     FROM task_recurrence_instance
                     JOIN task_recurrence_series
                         ON task_recurrence_series.series_id = task_recurrence_instance.series_id
@@ -1039,7 +1042,14 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                             planned_date::timestamp
                             + COALESCE(default_time, TIME '00:00')
                             + COALESCE(default_duration, INTERVAL '0 seconds')
-                        ) AS planned_ends_at
+                        ) AS planned_ends_at,
+                        (
+                            (repeat_until IS NULL OR planned_date <= repeat_until)
+                            AND (
+                                max_occurrences IS NULL
+                                OR sequence_no <= max_occurrences
+                            )
+                        ) AS is_within_rule
                     FROM recalculated
                 ),
                 updated_instance AS (
@@ -1060,6 +1070,8 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                         priority = planned.priority,
                         due_at = planned.planned_ends_at,
                         status = CASE
+                            WHEN task.status = 'completed' THEN task.status
+                            WHEN NOT planned.is_within_rule THEN 'cancelled'
                             WHEN task.status = 'cancelled' THEN 'active'
                             ELSE task.status
                         END
@@ -1341,7 +1353,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         task_status: TaskStatus,
     ) -> None:
         task_ids = self._task_ids_for_recurrence_from(recurrence_id, from_datetime)
-        updated_tasks = (
+        await self.session.execute(
             update(TaskModel)
             .values(status=task_status)
             .where(
@@ -1349,18 +1361,6 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 TaskModel.task_id.in_(task_ids),
                 self._task_is_not_deleted(),
             )
-            .returning(TaskModel.task_id)
-            .cte("updated_recurrence_tasks")
-        )
-        await self.session.execute(
-            update(TaskRecurrenceInstanceModel)
-            .values(is_customized=True)
-            .where(
-                TaskRecurrenceInstanceModel.series_id == recurrence_id,
-                TaskRecurrenceInstanceModel.planned_starts_at >= from_datetime,
-                TaskRecurrenceInstanceModel.deleted_at.is_(None),
-            )
-            .add_cte(updated_tasks)
         )
 
     @staticmethod

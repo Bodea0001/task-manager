@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from config import settings
 from constants import TEST_OTHER_USER_ID, TEST_TITLE_PREFIX, TEST_USER_ID
 from domain.value_objects.audit import AuditEventType
 from domain.value_objects.tasks import (
@@ -2599,6 +2600,105 @@ async def test_user_can_stop_recurrence_series_from_date(
 
     assert [item.schedule for item in tasks.tasks] == [
         Schedule(starts_at=datetime(2099, 11, 5, 10, 0), ends_at=datetime(2099, 11, 5, 11, 0))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_extending_stopped_recurrence_restores_only_matching_instances(
+    task_service: TaskService,
+) -> None:
+    starts_at = datetime(2099, 12, 10, 10, 0)
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}extend-stopped-recurrence",
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.DAILY,
+            schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+        ),
+    )
+    skipped_starts_at = starts_at + timedelta(days=3)
+    await task_service.skip_task_occurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        skipped_starts_at,
+    )
+    await task_service.stop_task_recurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        starts_at + timedelta(days=1),
+    )
+
+    await task_service.update_task_recurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        UpdateTaskRecurrence(
+            schedule=Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(hours=1)),
+            repeat_until=starts_at + timedelta(days=4),
+        ),
+    )
+    tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            search_text=f"{TEST_TITLE_PREFIX}extend-stopped-recurrence",
+            starts_from=starts_at,
+            ends_to=starts_at + timedelta(days=6),
+        ),
+    )
+
+    assert [scheduled_start(task) for task in tasks.tasks] == [
+        starts_at,
+        starts_at + timedelta(days=1),
+        starts_at + timedelta(days=2),
+        starts_at + timedelta(days=4),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_extending_old_recurrence_materializes_current_instances(
+    task_service: TaskService,
+) -> None:
+    current_start = datetime.now().replace(hour=6, minute=0, second=0, microsecond=0)
+    original_start = current_start - timedelta(
+        days=settings.recurrence.daily_materialization_days + 5
+    )
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}extend-old-recurrence",
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.DAILY,
+            schedule=Schedule(
+                starts_at=original_start,
+                ends_at=original_start + timedelta(hours=1),
+            ),
+        ),
+    )
+
+    await task_service.update_task_recurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        UpdateTaskRecurrence(
+            schedule=Schedule(
+                starts_at=original_start,
+                ends_at=original_start + timedelta(hours=1),
+            ),
+            repeat_until=current_start + timedelta(days=2),
+        ),
+    )
+    tasks = await task_service.get_tasks(
+        TEST_USER_ID,
+        ListTasksFilters(
+            search_text=f"{TEST_TITLE_PREFIX}extend-old-recurrence",
+            starts_from=current_start,
+            ends_to=current_start + timedelta(days=3),
+        ),
+    )
+
+    assert [scheduled_start(task) for task in tasks.tasks] == [
+        current_start,
+        current_start + timedelta(days=1),
+        current_start + timedelta(days=2),
     ]
 
 

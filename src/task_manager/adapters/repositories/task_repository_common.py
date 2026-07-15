@@ -240,6 +240,20 @@ class TaskRepositoryCommon(SQLAlchemyRepository):
             ends_at=data.schedule.starts_at + timedelta(days=days),
         )
 
+    @classmethod
+    def _continuing_materialization_window(
+        cls,
+        data: UpdateTaskRecurrence,
+        *,
+        frequency: RecurrenceFrequency,
+    ) -> Schedule:
+        starts_at = max(data.schedule.starts_at, datetime.now())
+        initial_window = cls._initial_materialization_window(data, frequency=frequency)
+        return Schedule(
+            starts_at=starts_at,
+            ends_at=starts_at + (initial_window.ends_at - initial_window.starts_at),
+        )
+
     @staticmethod
     def _recurrence_rules_json(rules: tuple[AddTaskRecurrence, ...]) -> str:
         return json.dumps(
