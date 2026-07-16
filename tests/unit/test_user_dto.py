@@ -122,6 +122,13 @@ def test_empty_user_update_is_rejected() -> None:
         UpdateUserData()
 
 
+def test_user_update_can_explicitly_clear_middle_name() -> None:
+    data = UpdateUserData(clear_middle_name=True)
+
+    assert data.middle_name is None
+    assert data.clear_middle_name is True
+
+
 @pytest.mark.parametrize(
     "data",
     [

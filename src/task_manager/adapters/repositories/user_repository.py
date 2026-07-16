@@ -189,7 +189,14 @@ class UserRepository(SQLAlchemyRepository):
 
     @staticmethod
     def _user_update_values(data: UpdateUserData) -> dict[str, Any]:
-        return {k: v for k, v in asdict(data).items() if v is not None}
+        values = {
+            key: value
+            for key, value in asdict(data).items()
+            if key != "clear_middle_name" and value is not None
+        }
+        if data.clear_middle_name:
+            values["middle_name"] = None
+        return values
 
     @staticmethod
     def _model_to_user(model: UserModel) -> User:

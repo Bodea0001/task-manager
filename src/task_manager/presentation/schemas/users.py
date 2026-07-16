@@ -46,11 +46,12 @@ class UpdateUserRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_update_fields(self) -> Self:
-        if all(
-            value is None
-            for value in (self.first_name, self.last_name, self.middle_name, self.email)
-        ):
+        if not self.model_fields_set:
             raise ValueError("at least one user field must be provided")
+
+        for field_name in ("first_name", "last_name", "email"):
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
         return self
 
     def to_dto(self) -> UpdateUserData:
@@ -59,6 +60,7 @@ class UpdateUserRequest(BaseModel):
             last_name=self.last_name,
             middle_name=self.middle_name,
             email=str(self.email) if self.email is not None else None,
+            clear_middle_name=("middle_name" in self.model_fields_set and self.middle_name is None),
         )
 
 

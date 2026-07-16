@@ -420,6 +420,36 @@ async def test_authenticated_user_can_update_profile() -> None:
 
 
 @pytest.mark.asyncio
+async def test_authenticated_user_can_clear_optional_profile_field() -> None:
+    user = User(
+        user_id=uuid4(),
+        first_name="First",
+        last_name="Last",
+        email="user@example.com",
+        middle_name="Middle",
+    )
+
+    async def authenticated_user() -> User:
+        return user
+
+    app = create_app()
+    app.dependency_overrides[get_current_user] = authenticated_user
+    app.dependency_overrides[get_user_service] = lambda: cast(UserService, UpdatingUserService())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.patch(
+            "/api/v1/users/me",
+            json={"middle_name": None},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["middle_name"] is None
+
+
+@pytest.mark.asyncio
 async def test_user_can_manage_a_task_through_http() -> None:
     user = User(
         user_id=uuid4(),

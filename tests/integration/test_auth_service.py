@@ -346,6 +346,30 @@ async def test_user_can_update_profile_partially(
 
 
 @pytest.mark.asyncio
+async def test_user_can_clear_middle_name(
+    auth_service: AuthService,
+    user_service: UserService,
+) -> None:
+    tokens = await auth_service.register(
+        RegisterUser(
+            email="clear-middle-name@example.com",
+            password="correct-password",
+            first_name="Clear",
+            last_name="Name",
+            middle_name="Middle",
+        )
+    )
+    current_user = await auth_service.get_current_user(tokens.access_token)
+
+    updated_user = await user_service.update_user(
+        current_user.user_id,
+        UpdateUserData(clear_middle_name=True),
+    )
+
+    assert updated_user.middle_name is None
+
+
+@pytest.mark.asyncio
 async def test_user_cannot_update_profile_to_existing_email(
     auth_service: AuthService,
     user_service: UserService,
