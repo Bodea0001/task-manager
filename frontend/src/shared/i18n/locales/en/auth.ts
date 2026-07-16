@@ -1,0 +1,53 @@
+export const auth = {
+  login: {
+    title: 'Sign in',
+    description: 'Continue to your tasks and assistant.',
+    submit: 'Sign in',
+    submitting: 'Signing in',
+    noAccount: 'New to Task Manager?',
+    registerLink: 'Create an account',
+  },
+  register: {
+    title: 'Create an account',
+    description: 'Set up your Task Manager workspace.',
+    submit: 'Create account',
+    submitting: 'Creating account',
+    hasAccount: 'Already have an account?',
+    loginLink: 'Sign in',
+  },
+  fields: {
+    email: 'Email',
+    password: 'Password',
+    firstName: 'First name',
+    lastName: 'Last name',
+    middleName: 'Middle name',
+    optional: 'optional',
+    showPassword: 'Show password',
+    hidePassword: 'Hide password',
+    passwordHint: 'Use at least 8 characters without spaces at the edges.',
+  },
+  errors: {
+    invalidCredentials: 'The email or password is incorrect.',
+    emailExists: 'An account with this email already exists.',
+    validation: 'Check the entered information and try again.',
+    unavailable: 'The server is unavailable. Check the connection and try again.',
+    generic: 'The request could not be completed. Try again.',
+  },
+  validation: {
+    passwordWhitespace: 'Password cannot start or end with a space.',
+  },
+  session: {
+    loading: 'Restoring your session',
+    unavailableTitle: 'The session could not be restored',
+    unavailableMessage: 'Check the connection and try again.',
+  },
+  account: {
+    title: 'Account',
+    description: 'Update your profile details and manage the current session.',
+    signedInAs: 'Signed in as {{email}}',
+    save: 'Save changes',
+    saving: 'Saving changes',
+    saved: 'Profile changes saved.',
+    signOut: 'Sign out',
+  },
+} as const

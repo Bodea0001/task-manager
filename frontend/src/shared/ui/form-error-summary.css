@@ -1,0 +1,41 @@
+.form-error-summary {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 32%, var(--border));
+  border-radius: 7px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.form-error-summary p {
+  margin: 0;
+  font-weight: 650;
+}
+
+.form-error-summary ul {
+  margin: 7px 0 0;
+  padding-left: 18px;
+}
+
+.form-error-summary details {
+  margin-top: 8px;
+  color: var(--text-muted);
+}
+
+.form-error-summary summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.form-error-summary code {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 520;
+  line-height: 1.5;
+}

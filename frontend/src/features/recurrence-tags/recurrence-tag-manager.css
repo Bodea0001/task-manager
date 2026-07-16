@@ -1,0 +1,123 @@
+.recurrence-tag-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.recurrence-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.recurrence-tag-option {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 580;
+}
+
+.recurrence-tag-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.recurrence-tag-option--selected {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.recurrence-tag-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.recurrence-tag-available {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recurrence-tag-available > strong {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.recurrence-tag-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.recurrence-tag-create-row {
+  display: flex;
+  gap: 8px;
+}
+
+.recurrence-tag-create-row input {
+  min-width: 0;
+  min-height: 38px;
+  flex: 1;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: 0;
+  color: var(--text);
+  background: var(--surface);
+  font: inherit;
+  font-size: 12px;
+}
+
+.recurrence-tag-create-row input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.recurrence-tag-create-row input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.recurrence-tag-create-row button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.recurrence-tag-create-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+@media (max-width: 520px) {
+  .recurrence-tag-create-row {
+    flex-direction: column;
+  }
+
+  .recurrence-tag-create-row button {
+    justify-content: center;
+  }
+}

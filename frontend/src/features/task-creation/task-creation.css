@@ -1,0 +1,63 @@
+.task-creation-panel {
+  width: min(100%, 860px);
+  margin: 0 auto;
+}
+
+.task-creation-header {
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-creation-header h1 {
+  margin: 18px 0 0;
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 720;
+  line-height: 1.25;
+}
+
+.task-creation-back {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 4px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-creation-back:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.task-creation-content {
+  padding: 26px 0 38px;
+}
+
+.task-creation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.task-creation-actions button {
+  min-height: 42px;
+}
+
+.task-creation-actions .primary-button {
+  gap: 8px;
+  padding-inline: 18px;
+}
+
+@media (max-width: 700px) {
+  .task-creation-header h1 {
+    font-size: 23px;
+  }
+}

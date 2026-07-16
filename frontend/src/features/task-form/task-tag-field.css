@@ -1,0 +1,217 @@
+.task-tag-field {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.task-tag-field-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.task-tag-field-heading h3 {
+  margin-bottom: 3px;
+}
+
+.task-tag-field-heading p,
+.task-tag-field-empty,
+.task-tag-field-error {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-tag-field-heading > span {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 11px;
+  font-weight: 680;
+}
+
+.task-tag-field-state {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.task-tag-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.task-tag-option-group {
+  display: inline-flex;
+}
+
+.task-tag-option {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px 0 0 6px;
+  color: var(--text-muted);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 580;
+}
+
+.task-tag-delete {
+  display: grid;
+  width: 29px;
+  min-height: 31px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+  color: var(--text-soft);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.task-tag-delete:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.task-tag-option:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.task-tag-option--selected {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.task-tag-create-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.task-tag-create-row input {
+  min-height: 38px;
+}
+
+.task-tag-create-row button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.task-tag-create-row button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.task-tag-field button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.task-tag-create-row button[aria-busy='true'] {
+  cursor: wait;
+}
+
+.task-tag-field-error {
+  color: var(--danger);
+}
+
+.task-tag-create-row input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.task-tag-delete-confirmation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--danger-soft);
+}
+
+.task-tag-delete-confirmation strong {
+  font-size: 12px;
+}
+
+.task-tag-delete-confirmation p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.task-tag-delete-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.task-tag-delete-actions button {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.task-tag-delete-actions .task-tag-delete-confirm {
+  border-color: var(--danger);
+  color: var(--danger-contrast);
+  background: var(--danger);
+}
+
+.task-tag-delete-confirm[aria-busy='true'] {
+  cursor: wait;
+}
+
+@media (max-width: 520px) {
+  .task-tag-create-row {
+    grid-template-columns: 1fr;
+  }
+
+  .task-tag-create-row button {
+    justify-content: center;
+  }
+
+  .task-tag-delete-confirmation {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

@@ -1,0 +1,101 @@
+.markdown-content {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  margin: 1.2em 0 0.45em;
+  line-height: 1.3;
+}
+
+.markdown-content h1 {
+  font-size: 20px;
+}
+
+.markdown-content h2 {
+  font-size: 17px;
+}
+
+.markdown-content h3 {
+  font-size: 15px;
+}
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content blockquote,
+.markdown-content pre {
+  margin: 0.65em 0;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 22px;
+}
+
+.markdown-content li + li {
+  margin-top: 3px;
+}
+
+.markdown-content a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
+.markdown-content blockquote {
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.markdown-content code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--surface-hover);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.markdown-content pre {
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-subtle) 82%, #000000);
+  color: var(--text);
+}
+
+.markdown-content pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.markdown-content hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-content th,
+.markdown-content td {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  text-align: left;
+}

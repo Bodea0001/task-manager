@@ -1,0 +1,23 @@
+.brand-mark {
+  position: relative;
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  color: var(--brand-contrast);
+  background: var(--brand);
+}
+
+.brand-mark__tasks {
+  transform: translate(-1px, 1px);
+}
+
+.brand-mark__sparkle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  fill: currentColor;
+}

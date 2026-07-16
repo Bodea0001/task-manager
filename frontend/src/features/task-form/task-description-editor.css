@@ -1,0 +1,68 @@
+.task-description-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-description-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.task-description-header > span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.task-description-modes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+}
+
+.task-description-modes button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.task-description-modes button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgb(var(--shadow-color) / 16%);
+}
+
+.task-description-field small {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.task-description-field textarea[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.task-description-field .task-description-error {
+  color: var(--danger);
+}
+
+.task-description-preview {
+  min-height: 142px;
+  padding: 13px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
