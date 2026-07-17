@@ -352,7 +352,9 @@ class RecurrenceRuleData(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     frequency: RecurrenceFrequency = Field(description="Recurrence frequency.")
-    anchor_date: date = Field(description="Date of the first occurrence.")
+    anchor_date: date = Field(
+        description="Inclusive rule start date; calendar selectors choose the first occurrence."
+    )
     default_time: time = Field(description="Deadline time used for every occurrence.")
     interval: int = Field(default=1, ge=1, description="Positive recurrence interval.")
     default_duration: timedelta | None = Field(
@@ -406,7 +408,7 @@ class AddTaskRecurrenceRuleInput(TemplateIdToolInput, RecurrenceRuleData):
 
 
 class UpdateTaskRecurrenceInput(RecurrenceIdToolInput):
-    anchor_date: date = Field(description="Updated date of the first occurrence.")
+    anchor_date: date = Field(description="Updated inclusive rule start date.")
     default_time: time = Field(description="Updated deadline time for each occurrence.")
     default_duration: timedelta | None = Field(
         default=None,

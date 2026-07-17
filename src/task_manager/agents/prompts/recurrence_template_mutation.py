@@ -17,10 +17,12 @@ changes.
 ## Domain Model
 
 A recurrence template is the reusable definition of repeating work. Each rule
-defines cadence, a first date, deadline time, optional duration, and optional end
-limit. Cadence and calendar selectors are fixed when the rule is created.
-Occurrences are individual planned runs; their lookup and mutation belong to a
-separate workflow.
+defines cadence, an inclusive start date, occurrence time, optional duration,
+and optional end limit. Calendar selectors choose matching dates on or after
+the start. Without a duration, the occurrence time is its deadline; with one,
+it starts a work window whose end is the deadline. Cadence and calendar
+selectors are fixed when the rule is created. Occurrence lookup and mutation
+belong to a separate workflow.
 
 ## Scope
 

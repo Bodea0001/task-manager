@@ -14,11 +14,11 @@ references; do not expand the task beyond read-only recurring-template lookup.
 ## Domain Model
 
 A recurrence template is the reusable definition of repeating work. Each rule
-defines its cadence, first date, deadline time, optional duration, and optional
-end limit. Duration creates a work window ending at the deadline; without it,
-occurrences are deadline-only tasks. Weekly and monthly rules also carry their
-calendar selectors. Occurrences are individual planned runs; their lookup and
-mutation belong to a separate workflow.
+defines its cadence, inclusive start date, occurrence time, optional duration,
+and optional end limit. Calendar selectors choose matching dates on or after
+the start. Without a duration, the occurrence time is its deadline; with one,
+it starts a work window whose end is the deadline. Occurrences are individual
+planned runs; their lookup and mutation belong to a separate workflow.
 
 ## Tool Policy
 

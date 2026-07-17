@@ -846,7 +846,7 @@ async def add_task_recurrence_rule(
     Args:
         template_id: Exact recurrence template id.
         frequency: Recurrence frequency.
-        anchor_date: Date of the first occurrence.
+        anchor_date: Inclusive rule start date.
         default_time: Deadline time for each occurrence.
         interval: Positive interval.
         default_duration: Optional duration used to create a schedule.
@@ -899,7 +899,7 @@ async def update_task_recurrence_rule(
 
     Args:
         recurrence_id: Exact recurrence rule id.
-        anchor_date: Date of the first occurrence.
+        anchor_date: Inclusive rule start date.
         default_time: Deadline time for each occurrence.
         default_duration: Optional duration used to create a schedule.
         repeat_until: Optional inclusive end date.

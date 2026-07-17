@@ -465,6 +465,32 @@ async def test_weekly_recurrence_materializes_each_selected_weekday(
 
 
 @pytest.mark.asyncio
+async def test_weekly_recurrence_starts_on_first_selected_weekday_on_or_after_start_date(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+) -> None:
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}weekly-start-boundary",
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.WEEKLY,
+            anchor_date=datetime(2099, 8, 7).date(),  # Friday
+            default_time=datetime(2099, 8, 7, 9).time(),
+            weekdays=(Weekday.TUESDAY, Weekday.THURSDAY, Weekday.SATURDAY),
+            occurrences_limit=4,
+        ),
+    )
+
+    assert await generated_instance_dates(test_engine, recurrence.recurrence_id) == [
+        (1, datetime(2099, 8, 8).date()),
+        (2, datetime(2099, 8, 11).date()),
+        (3, datetime(2099, 8, 13).date()),
+        (4, datetime(2099, 8, 15).date()),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_weekly_overlap_check_uses_each_selected_weekday(
     task_service: TaskService,
 ) -> None:
@@ -532,6 +558,33 @@ async def test_monthly_recurrence_skips_dates_absent_from_a_month(
         (2, datetime(2099, 10, 31).date()),
         (3, datetime(2099, 12, 31).date()),
         (4, datetime(2100, 1, 31).date()),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_monthly_recurrence_starts_on_first_matching_date_on_or_after_start_date(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+) -> None:
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}monthly-start-boundary",
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.MONTHLY,
+            anchor_date=datetime(2099, 8, 4).date(),
+            default_time=datetime(2099, 8, 4, 9).time(),
+            month_rule=RecurrenceMonthRule(
+                week_of_month=-1,
+                weekday=Weekday.FRIDAY,
+            ),
+            occurrences_limit=2,
+        ),
+    )
+
+    assert await generated_instance_dates(test_engine, recurrence.recurrence_id) == [
+        (1, datetime(2099, 8, 28).date()),
+        (2, datetime(2099, 9, 25).date()),
     ]
 
 

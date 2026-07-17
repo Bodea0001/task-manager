@@ -170,7 +170,9 @@ class TaskRecurrenceSeries(Base):
     step: Mapped[int] = mapped_column(
         Integer, server_default="1", comment="Шаг частоты: каждые N дней/недель/месяцев"
     )
-    anchor_date: Mapped[date] = mapped_column(Date, comment="Дата первого повторения")
+    anchor_date: Mapped[date] = mapped_column(
+        Date, comment="Включительная дата начала действия правила"
+    )
     default_time: Mapped[time] = mapped_column(Time, comment="Время дедлайна экземпляра")
     default_duration: Mapped[timedelta | None] = mapped_column(
         Interval, nullable=True, comment="Длительность экземпляра с расписанием"

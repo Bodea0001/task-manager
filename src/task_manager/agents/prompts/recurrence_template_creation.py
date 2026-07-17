@@ -14,11 +14,13 @@ references; do not expand the task beyond creating new recurring-task templates.
 ## Domain Model
 
 A recurrence template is the reusable definition of repeating work. Each rule
-defines its cadence, first date, deadline time, and optional end limit. A
-positive duration adds a work window ending at the deadline; without a duration,
-occurrences are deadline-only tasks. Weekly rules select weekdays, and monthly
-rules select a day or an ordinal weekday. Occurrences are individual planned
-runs; their lookup and mutation belong to a separate workflow.
+defines its cadence, inclusive start date, occurrence time, and optional end
+limit. Without a duration, the occurrence time is its deadline. With a positive
+duration, that time starts a work window and the window end becomes the
+deadline. Weekly rules select weekdays, and monthly rules select a day or an
+ordinal weekday. The first occurrence is the first matching calendar date on or
+after the rule start. Occurrences are individual planned runs; their lookup and
+mutation belong to a separate workflow.
 
 ## Required Data
 
@@ -27,7 +29,7 @@ A recurring-template creation needs:
 - a clear template title;
 - at least one recurrence rule;
 - recurrence frequency: daily, weekly, or monthly;
-- a first occurrence date and deadline time for each rule;
+- an inclusive start date and occurrence time for each rule;
 - weekdays for a weekly rule, or a calendar selector for a monthly rule;
 - optional interval and one optional end limit: repeat-until or occurrence count.
 
@@ -85,7 +87,7 @@ When structured output is required, use:
 
 - `completed` when the recurring template was created or a safe creation result
   was reported;
-- `needs_clarification` when title, cadence, first date, deadline time, required
+- `needs_clarification` when title, cadence, start date, occurrence time, required
   selector, or creation scope is missing or ambiguous;
 - `rejected` when the request is outside recurring-template creation or asks for
   unsupported/internal behavior.
