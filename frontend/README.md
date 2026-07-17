@@ -189,7 +189,7 @@ Rules support:
 - monthly recurrence by day of month;
 - monthly recurrence by an ordinal weekday;
 - intervals longer than one day, week, or month;
-- a first occurrence date and required default time;
+- an inclusive rule start date and required occurrence time;
 - optional duration for scheduled time blocks;
 - optional ending by date or number of occurrences.
 
@@ -197,9 +197,9 @@ Without a duration, generated tasks receive a deadline. With a duration, they
 receive a scheduled start and end time.
 
 The recurrence pattern and calendar selection are intentionally immutable after
-creation. Users can still change the first date, default time, duration, and
-ending conditions. A structurally different pattern should be represented by a
-new rule, avoiding silent reinterpretation of already generated work.
+creation. Users can still change the rule start date, occurrence time, duration,
+and ending conditions. A structurally different pattern should be represented
+by a new rule, avoiding silent reinterpretation of already generated work.
 
 Deleting a rule removes its unfinished generated tasks and preserves completed
 instances.

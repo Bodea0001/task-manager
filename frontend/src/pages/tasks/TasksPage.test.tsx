@@ -212,7 +212,7 @@ describe('Tasks workspace', () => {
     await fireEvent.input(screen.getByLabelText('Title'), {
       target: { value: createdTask.title },
     })
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Deadline' }), {
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Task deadline' }), {
       target: { value: '07/20/2026 10:00' },
     })
     await fireEvent.input(screen.getByLabelText('Find or create a tag'), {
@@ -303,7 +303,7 @@ describe('Tasks workspace', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Add task' }))
     const titleInput = screen.getByLabelText('Title')
-    const dueAtInput = screen.getByRole('textbox', { name: 'Deadline' })
+    const dueAtInput = screen.getByRole('textbox', { name: 'Task deadline' })
     await fireEvent.input(titleInput, {
       target: { value: 'Prepare notes' },
     })
@@ -380,10 +380,15 @@ describe('Tasks workspace', () => {
     await fireEvent.input(screen.getByLabelText('Title'), {
       target: { value: 'Conflicting task' },
     })
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Deadline' }), {
+    await fireEvent.input(screen.getByRole('textbox', { name: 'Task deadline' }), {
       target: { value: '07/20/2026 11:30' },
     })
     await fireEvent.click(screen.getByRole('button', { name: 'Add schedule' }))
+    expect(
+      screen.getByText(
+        'The deadline remains separate from the schedule. The schedule is the time planned for working on the task.',
+      ),
+    ).toBeVisible()
     const startsAtInput = screen.getByRole('textbox', { name: 'Starts' })
     const endsAtInput = screen.getByRole('textbox', { name: 'Ends' })
     await fireEvent.input(startsAtInput, {

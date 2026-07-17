@@ -38,6 +38,10 @@ export const tasks = {
     cancel: 'Back to tasks',
     create: 'Create task',
     creating: 'Creating…',
+    deadlineLabel: 'Task deadline',
+    deadlineHint: 'The deadline is when the task must be completed.',
+    deadlineWithScheduleHint:
+      'The deadline remains separate from the schedule. The schedule is the time planned for working on the task.',
     mutationError: 'The task could not be created. Try again.',
   },
   metadata: {

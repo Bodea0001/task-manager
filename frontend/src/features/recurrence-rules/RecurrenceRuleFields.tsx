@@ -177,13 +177,16 @@ export function RecurrenceRuleFields(props: {
           <fieldset
             class="recurrence-weekday-field"
             aria-invalid={props.errors?.weekdays === undefined ? undefined : 'true'}
-            aria-describedby={
+            aria-describedby={`recurrence-weekdays-hint${
               props.errors?.weekdays === undefined
-                ? undefined
-                : 'recurrence-weekdays-error'
-            }
+                ? ''
+                : ' recurrence-weekdays-error'
+            }`}
           >
             <legend>{t('recurring.rules.editor.weekdays')}</legend>
+            <p id="recurrence-weekdays-hint" class="recurrence-rule-field-hint">
+              {t('recurring.rules.editor.weekdaysHint')}
+            </p>
             <div>
               <For each={weekdays}>
                 {(weekday) => (
@@ -232,7 +235,11 @@ export function RecurrenceRuleFields(props: {
         <DateTimePicker
           mode="time"
           name="default_time"
-          label={t('recurring.rules.editor.defaultTime')}
+          label={t(
+            props.form.hasDuration()
+              ? 'recurring.rules.editor.blockStartTime'
+              : 'recurring.rules.editor.deadlineTimeField',
+          )}
           value={props.form.defaultTime()}
           required
           disabled={props.disabled}
@@ -259,7 +266,13 @@ export function RecurrenceRuleFields(props: {
           <span aria-hidden="true" />
           {t('recurring.rules.editor.addDuration')}
         </button>
-        <p>{t('recurring.rules.editor.durationHint')}</p>
+        <p>
+          {t(
+            props.form.hasDuration()
+              ? 'recurring.rules.editor.durationActiveHint'
+              : 'recurring.rules.editor.durationHint',
+          )}
+        </p>
         <Show when={props.form.hasDuration()}>
           <div class="recurrence-rule-fields recurrence-duration-fields">
             <NumberField
@@ -378,7 +391,7 @@ function MonthlyRuleFields(props: {
                 error={props.errors?.ordinal_week}
                 options={['1', '2', '3', '4', '5', '-1'].map((value) => ({
                   label: t(
-                    `recurring.rules.editor.ordinal.${value === '-1' ? 'last' : `week${value}`}` as TranslationKey,
+                    `recurring.rules.editor.ordinalWeekOption.${value === '-1' ? 'last' : `week${value}`}` as TranslationKey,
                   ),
                   value,
                 }))}

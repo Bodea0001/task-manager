@@ -266,7 +266,7 @@ export function TaskCreationPanel(props: {
             />
             <DateTimePicker
               name="due_at"
-              label={t('tasks.details.fields.dueAt')}
+              label={t('tasks.creation.deadlineLabel')}
               value={dueAt()}
               required
               disabled={creation.isPending}
@@ -278,6 +278,13 @@ export function TaskCreationPanel(props: {
               onValidityChange={setDueAtValid}
             />
           </div>
+          <p class="task-form-hint">
+            {t(
+              hasSchedule()
+                ? 'tasks.creation.deadlineWithScheduleHint'
+                : 'tasks.creation.deadlineHint',
+            )}
+          </p>
 
           <section
             class="task-form-section"

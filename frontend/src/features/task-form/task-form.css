@@ -75,6 +75,13 @@
   gap: 16px;
 }
 
+.task-form-hint {
+  margin: -12px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .task-form-section {
   padding: 20px;
   border: 1px solid var(--border);

@@ -305,7 +305,7 @@ describe('Recurring tasks workspace', () => {
       await screen.findByRole('button', { name: 'Add rule' }),
     )
     await fireEvent.input(
-      screen.getByRole('textbox', { name: 'First occurrence date' }),
+      screen.getByRole('textbox', { name: 'Rule start date' }),
       {
         target: { value: '07/20/2026' },
       },
@@ -316,6 +316,12 @@ describe('Recurring tasks workspace', () => {
     await fireEvent.click(
       screen.getByRole('switch', { name: 'Reserve a time block' }),
     )
+    expect(screen.getByRole('textbox', { name: 'Time block starts' })).toBeVisible()
+    expect(
+      screen.getByText(
+        'The time above is the block start. Its end and the task deadline are calculated by adding this duration.',
+      ),
+    ).toBeVisible()
     const durationMinutes = screen.getByRole('textbox', { name: 'Minutes' })
     await fireEvent.input(durationMinutes, { target: { value: '75' } })
     expect(durationMinutes).toHaveValue('59')
@@ -352,12 +358,13 @@ describe('Recurring tasks workspace', () => {
       screen.getByRole('button', { name: 'Edit Weekly rule' }),
     )
     await fireEvent.input(
-      screen.getByRole('textbox', { name: 'First occurrence date' }),
+      screen.getByRole('textbox', { name: 'Rule start date' }),
       { target: { value: '07/20/2026' } },
     )
-    await fireEvent.input(screen.getByRole('textbox', { name: 'Deadline time' }), {
-      target: { value: '12:00' },
-    })
+    await fireEvent.input(
+      screen.getByRole('textbox', { name: 'Time block starts' }),
+      { target: { value: '12:00' } },
+    )
     await fireEvent.click(
       screen.getByRole('button', { name: 'Review change' }),
     )
@@ -465,6 +472,37 @@ describe('Recurring tasks workspace', () => {
     expect(body.rules[0]).not.toHaveProperty('schedule')
   })
 
+  it('explains weekly multi-day selection and uses feminine week positions in Russian', async () => {
+    window.history.replaceState({}, '', '/recurring')
+    await changeLocale('ru')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input) === '/api/v1/tags'
+            ? jsonResponse({ tags: [] })
+            : jsonResponse({ templates: [] }),
+        ),
+      ),
+    )
+    renderRecurringPage()
+
+    await fireEvent.click(
+      await screen.findByRole('button', { name: 'Новая повторяющаяся задача' }),
+    )
+    await chooseOption('Частота Ежедневно', 'Еженедельно')
+
+    expect(screen.getByText('Можно выбрать сразу несколько дней.')).toBeVisible()
+
+    await chooseOption('Частота Еженедельно', 'Ежемесячно')
+    await chooseOption('Правило месяца День месяца', 'Позиция дня недели')
+    await chooseOption('Неделя месяца первая', 'последняя')
+
+    expect(
+      screen.getByRole('button', { name: 'Неделя месяца последняя' }),
+    ).toBeVisible()
+  })
+
   it('creates a monthly ordinal-weekday rule through the calendar controls', async () => {
     window.history.replaceState({}, '', '/recurring')
     const template = createTemplate()
@@ -524,7 +562,7 @@ describe('Recurring tasks workspace', () => {
       'Move to the next weekday',
     )
     await fireEvent.input(
-      screen.getByRole('textbox', { name: 'First occurrence date' }),
+      screen.getByRole('textbox', { name: 'Rule start date' }),
       { target: { value: '08/01/2026' } },
     )
     await fireEvent.input(screen.getByRole('textbox', { name: 'Deadline time' }), {
