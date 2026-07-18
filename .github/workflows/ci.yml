@@ -23,7 +23,7 @@ env:
   TASK_CONFIG_AGENT_SUBAGENT_MODEL_NAME: ci-subagent
   TASK_CONFIG_AGENT_BASE_URL: https://example.invalid
   TASK_CONFIG_AGENT_BASE_API_KEY: ci-only-api-key
-  TASK_CONFIG_COORDINATION_REDIS_URL: redis://127.0.0.1:6379/1
+  TASK_CONFIG_KEY_VALUE_STORE_URL: redis://127.0.0.1:6379/0
 
 jobs:
   backend:

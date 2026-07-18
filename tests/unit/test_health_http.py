@@ -35,7 +35,7 @@ class DatabaseReadinessProbe:
             raise SQLAlchemyError("Database is unavailable")
 
 
-class CoordinationReadinessProbe:
+class KeyValueStoreReadinessProbe:
     def __init__(self, available: bool) -> None:
         self.available = available
 
@@ -87,7 +87,7 @@ async def test_readiness_reflects_required_resource_availability(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "agent_ready, database_ready, coordination_ready, expected_status",
+    "agent_ready, database_ready, key_value_store_ready, expected_status",
     (
         (True, True, True, 200),
         (False, True, True, 503),
@@ -98,14 +98,14 @@ async def test_readiness_reflects_required_resource_availability(
 async def test_readiness_requires_all_application_resources(
     agent_ready: bool,
     database_ready: bool,
-    coordination_ready: bool,
+    key_value_store_ready: bool,
     expected_status: int,
 ) -> None:
     container = cast(
         ApplicationContainer,
         SimpleNamespace(
             engine=DatabaseReadinessProbe(database_ready),
-            coordination_client=CoordinationReadinessProbe(coordination_ready),
+            key_value_store_client=KeyValueStoreReadinessProbe(key_value_store_ready),
             agent=SimpleNamespace(is_initialized=agent_ready),
         ),
     )

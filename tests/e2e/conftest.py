@@ -106,7 +106,7 @@ def _validate_required_environment() -> None:
         "TASK_CONFIG_AUTH_PASSWORD_SALT",
         "TASK_CONFIG_AGENT_BASE_URL",
         "TASK_CONFIG_AGENT_BASE_API_KEY",
-        "TASK_CONFIG_COORDINATION_REDIS_URL",
+        "TASK_CONFIG_KEY_VALUE_STORE_URL",
     )
     missing_names = [name for name in required_names if not os.getenv(name)]
     has_base_model = bool(os.getenv("TASK_CONFIG_AGENT_BASE_MODEL_NAME"))

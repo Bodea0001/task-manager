@@ -7,8 +7,8 @@ from redis.exceptions import RedisError
 from config import CoordinationConfig, settings
 from adapters.agent_run_locks import (
     RedisAgentRunLockManager,
-    create_coordination_client,
 )
+from adapters.key_value_store import create_key_value_store_client
 
 
 @pytest.mark.asyncio
@@ -21,8 +21,14 @@ async def test_redis_lease_coordinates_independent_agent_run_managers() -> None:
             "lease_renew_interval_seconds": 1,
         }
     )
-    first_client = create_coordination_client(config)
-    second_client = create_coordination_client(config)
+    first_client = create_key_value_store_client(
+        settings.key_value_store,
+        max_connections=config.max_connections,
+    )
+    second_client = create_key_value_store_client(
+        settings.key_value_store,
+        max_connections=config.max_connections,
+    )
     chat_id = uuid4()
 
     try:

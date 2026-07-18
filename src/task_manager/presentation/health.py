@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 
 DATABASE_HEALTH_TIMEOUT_SECONDS = 2
-COORDINATION_HEALTH_TIMEOUT_SECONDS = 2
+KEY_VALUE_STORE_HEALTH_TIMEOUT_SECONDS = 2
 
 
 async def is_database_ready(engine: AsyncEngine) -> bool:
@@ -22,10 +22,10 @@ async def is_database_ready(engine: AsyncEngine) -> bool:
     return True
 
 
-async def is_coordination_ready(client: Redis) -> bool:
-    """Return whether Redis answers a bounded lightweight command."""
+async def is_key_value_store_ready(client: Redis) -> bool:
+    """Return whether the shared key-value store answers a bounded command."""
     try:
-        async with timeout(COORDINATION_HEALTH_TIMEOUT_SECONDS):
+        async with timeout(KEY_VALUE_STORE_HEALTH_TIMEOUT_SECONDS):
             await client.ping()
     except TimeoutError, RedisError:
         return False

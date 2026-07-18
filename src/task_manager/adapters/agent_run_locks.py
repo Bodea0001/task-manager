@@ -25,18 +25,6 @@ return 0
 """
 
 
-def create_coordination_client(config: CoordinationConfig) -> Redis:
-    """Create one process-wide asynchronous Redis client and connection pool."""
-    return Redis.from_url(
-        config.redis_url,
-        max_connections=config.max_connections,
-        socket_connect_timeout=config.connect_timeout_seconds,
-        socket_timeout=config.socket_timeout_seconds,
-        health_check_interval=config.health_check_interval_seconds,
-        decode_responses=True,
-    )
-
-
 class RedisAgentRunLockManager:
     """Coordinate chat-bound runs through expiring token-owned Redis keys."""
 
@@ -76,7 +64,6 @@ class RedisAgentRunLockManager:
 class _RedisAgentRunLease:
     def __init__(
         self,
-        *,
         key: str,
         token: str,
         ttl_ms: int,

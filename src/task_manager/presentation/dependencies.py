@@ -13,7 +13,7 @@ from services.tasks import TaskService
 from services.users import UserService
 from domain.value_objects.users import User
 from presentation.container import ApplicationContainer
-from presentation.health import is_coordination_ready, is_database_ready
+from presentation.health import is_database_ready, is_key_value_store_ready
 from presentation.agent_stream import AgentStreamCoordinator
 from presentation.request_context import (
     add_request_log_fields,
@@ -96,11 +96,11 @@ async def get_application_readiness(
     """Check resources required before this process should receive traffic."""
     if not container.agent.is_initialized:
         return False
-    database_ready, coordination_ready = await gather(
+    database_ready, key_value_store_ready = await gather(
         is_database_ready(container.engine),
-        is_coordination_ready(container.coordination_client),
+        is_key_value_store_ready(container.key_value_store_client),
     )
-    return database_ready and coordination_ready
+    return database_ready and key_value_store_ready
 
 
 async def get_current_user(

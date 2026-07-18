@@ -52,12 +52,12 @@ class RecurrenceConfig(BaseModel):
     monthly_materialization_days: int = 365
 
 
-class CoordinationConfig(BaseModel):
-    """Redis-backed coordination settings for distributed agent runs."""
+class KeyValueStoreConfig(BaseModel):
+    """Connection settings for the shared Redis-compatible key-value store."""
 
-    redis_url: str = "redis://localhost:6379/1"
-    key_prefix: str = "task-manager:v1:agent-run"
-    max_connections: int = Field(default=10, ge=1)
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = "redis://localhost:6379/0"
     connect_timeout_seconds: float = Field(default=1.0, gt=0)
     socket_timeout_seconds: float = Field(default=1.0, gt=0)
     health_check_interval_seconds: int = Field(default=30, ge=0)
@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     auth: AuthConfig
     agent: AgentConfig
     recurrence: RecurrenceConfig = RecurrenceConfig()
+    key_value_store: KeyValueStoreConfig = KeyValueStoreConfig()
     coordination: CoordinationConfig = CoordinationConfig()
     http: HTTPConfig = HTTPConfig()
 

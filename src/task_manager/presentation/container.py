@@ -26,4 +26,4 @@ class ApplicationContainer:
     chat_service: ChatService
     agent: AgentApplication
     agent_stream: AgentStreamCoordinator
-    coordination_client: Redis
+    key_value_store_client: Redis

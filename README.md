@@ -217,10 +217,11 @@ TASK_CONFIG_AUTH_JWT_SECRET=change-me-to-a-long-random-secret
 TASK_CONFIG_AUTH_PASSWORD_SALT=change-me-to-a-long-random-salt
 ```
 
-Run Redis and configure the database used to coordinate concurrent agent runs:
+Run one Redis-compatible key-value store, such as Redis or Valkey, for all
+distributed coordination and background delivery:
 
 ```bash
-TASK_CONFIG_COORDINATION_REDIS_URL=redis://localhost:6379/1
+TASK_CONFIG_KEY_VALUE_STORE_URL=redis://localhost:6379/0
 ```
 
 Configure the assistant model before running agent code:
@@ -266,10 +267,10 @@ TASK_MANAGER_RUN_E2E=1 uv run pytest tests/e2e
 ```
 
 The E2E environment also requires the normal database, authentication, model,
-and `TASK_CONFIG_COORDINATION_REDIS_URL` settings. Tests use public HTTP APIs,
-isolated users, two server processes, and a unique Redis key prefix. They do not
-emit Langfuse traces. `TASK_MANAGER_E2E_DB_NAME` can override the configured
-test database when stronger isolation is needed.
+and `TASK_CONFIG_KEY_VALUE_STORE_URL` settings. Tests use public HTTP APIs,
+isolated users, two server processes, and a unique key prefix. They do not emit
+Langfuse traces. `TASK_MANAGER_E2E_DB_NAME` can override the configured test
+database when stronger isolation is needed.
 
 Apply database migrations:
 
@@ -302,20 +303,21 @@ Granian access logs are disabled in the command above because the application
 already emits one correlated completion event for every HTTP request.
 
 Use `/health/live` for process liveness. `/health/ready` reports readiness only
-when PostgreSQL and coordination Redis are reachable and the agent is
+when PostgreSQL and the shared key-value store are reachable and the agent is
 initialized.
 
 Authenticated clients can send assistant requests with
 `POST /api/v1/chats/{chat_id}/agent`. The response is a `text/event-stream`
 containing plan progress, heartbeat, final result, or controlled error events.
 
-The integration tests require PostgreSQL and use Redis when it is available.
+The integration tests require PostgreSQL and use the configured Redis-compatible
+store when it is available.
 Configuration is loaded from environment variables with the `TASK_CONFIG`
 prefix, and test runs can use `.env` and `.test.env` files. Integration tests
 must run against a dedicated test database: `TASK_CONFIG_DB_NAME` must contain a
 separate `test`, `testing` or `pytest` part, for example `task_manager_test`.
-Redis tests isolate their keys with a unique prefix. The integration test
-fixtures truncate application tables before and after each test.
+Key-value store tests isolate their keys with a unique prefix. The integration
+test fixtures truncate application tables before and after each test.
 
 ## Continuous Integration
 

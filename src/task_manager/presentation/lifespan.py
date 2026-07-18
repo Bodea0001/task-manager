@@ -12,10 +12,8 @@ from services.chats import ChatService
 from services.tags import TagService
 from services.tasks import TaskService
 from services.users import UserService
-from adapters.agent_run_locks import (
-    RedisAgentRunLockManager,
-    create_coordination_client,
-)
+from adapters.agent_run_locks import RedisAgentRunLockManager
+from adapters.key_value_store import create_key_value_store_client
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from db.database import create_database_engine
 from presentation.agent_stream import AgentStreamCoordinator
@@ -103,7 +101,10 @@ async def create_application_container() -> ApplicationContainer:
     engine = create_database_engine()
     uow = SQLAlchemyUnitOfWork(engine)
     agent = AgentApplication()
-    coordination_client = create_coordination_client(settings.coordination)
+    key_value_store_client = create_key_value_store_client(
+        settings.key_value_store,
+        max_connections=settings.coordination.max_connections,
+    )
 
     try:
         auth_service = AuthService(uow)
@@ -118,13 +119,13 @@ async def create_application_container() -> ApplicationContainer:
             tag_service=tag_service,
             chat_service=chat_service,
             run_lock_manager=RedisAgentRunLockManager(
-                coordination_client,
+                key_value_store_client,
                 settings.coordination,
             ),
         )
     except BaseException:
         cleanup_error = await _close_resources(
-            coordination_client.aclose,
+            key_value_store_client.aclose,
             agent.close,
             engine.dispose,
         )
@@ -154,7 +155,7 @@ async def create_application_container() -> ApplicationContainer:
         chat_service=chat_service,
         agent=agent,
         agent_stream=agent_stream,
-        coordination_client=coordination_client,
+        key_value_store_client=key_value_store_client,
     )
 
 
@@ -162,7 +163,7 @@ async def close_application_container(container: ApplicationContainer) -> None:
     """Close container resources even if one shutdown operation fails."""
     cleanup_error = await _close_resources(
         container.agent_stream.close,
-        container.coordination_client.aclose,
+        container.key_value_store_client.aclose,
         container.agent.close,
         container.engine.dispose,
     )
