@@ -2645,6 +2645,39 @@ async def test_materialize_recurrence_instances_for_all_owners_uses_only_owners_
 
 
 @pytest.mark.asyncio
+async def test_materialize_recurrence_instances_for_all_owners_isolates_owner_schedules(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+) -> None:
+    recurrence_ids = []
+    for user_id in (TEST_USER_ID, TEST_OTHER_USER_ID):
+        recurrence = await create_task_recurrence_rule(
+            task_service,
+            user_id,
+            f"{TEST_TITLE_PREFIX}recurring-owner-isolation",
+            scheduled_recurrence(
+                frequency=RecurrenceFrequency.DAILY,
+                schedule=Schedule(
+                    starts_at=datetime(2099, 1, 1, 10, 0),
+                    ends_at=datetime(2099, 1, 1, 11, 0),
+                ),
+            ),
+        )
+        recurrence_ids.append(recurrence.recurrence_id)
+
+    owner_count = await task_service.materialize_recurrence_instances_for_all_owners(
+        Schedule(starts_at=datetime(2099, 4, 15, 0, 0), ends_at=datetime(2099, 4, 16, 0, 0))
+    )
+
+    assert owner_count == 2
+    for recurrence_id in recurrence_ids:
+        assert (
+            await max_generated_instance_date(test_engine, recurrence_id)
+            >= datetime(2099, 4, 15).date()
+        )
+
+
+@pytest.mark.asyncio
 async def test_materialize_recurrence_instances_for_all_owners_skips_not_due_series(
     task_service: TaskService,
 ) -> None:

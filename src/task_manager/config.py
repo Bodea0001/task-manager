@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     AliasChoices,
@@ -61,6 +62,58 @@ class KeyValueStoreConfig(BaseModel):
     connect_timeout_seconds: float = Field(default=1.0, gt=0)
     socket_timeout_seconds: float = Field(default=1.0, gt=0)
     health_check_interval_seconds: int = Field(default=30, ge=0)
+
+
+class CeleryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    broker_pool_limit: int = Field(default=2, ge=1)
+    broker_key_prefix: str = Field(default="task-manager:v1:celery:", min_length=1)
+    result_backend: str | None = None
+    coordination_key_prefix: str = "task-manager:v1:background-job"
+    coordination_max_connections: int = Field(default=2, ge=1)
+    lease_ttl_seconds: int = Field(default=2_400, ge=60)
+    lease_renew_interval_seconds: int = Field(default=600, ge=1)
+    completion_ttl_seconds: int = Field(default=604_800, ge=86_400)
+    recurrence_materialization_queue: str = "recurrence_materialization"
+    recurrence_materialization_hour: int = Field(default=2, ge=0, le=23)
+    recurrence_materialization_minute: int = Field(default=0, ge=0, le=59)
+    recurrence_materialization_batch_size: int = Field(default=20, ge=1, le=100)
+    timezone: str = "UTC"
+    message_expires_seconds: int = Field(default=72_000, ge=3_600, le=86_400)
+    retry_max_retries: int = Field(default=4, ge=0, le=10)
+    retry_backoff_seconds: int = Field(default=30, ge=1)
+    retry_backoff_max_seconds: int = Field(default=900, ge=1)
+    task_soft_time_limit_seconds: int = Field(default=1_800, ge=60)
+    task_time_limit_seconds: int = Field(default=2_100, ge=60)
+    worker_concurrency: int = Field(default=1, ge=1)
+    worker_prefetch_multiplier: int = Field(default=1, ge=1)
+    worker_db_pool_size: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def validate_execution_timing(self) -> "CeleryConfig":
+        if self.task_soft_time_limit_seconds >= self.task_time_limit_seconds:
+            raise ValueError("task soft time limit must be shorter than hard time limit")
+        if self.task_time_limit_seconds >= self.lease_ttl_seconds:
+            raise ValueError("task hard time limit must be shorter than lease TTL")
+        if self.lease_renew_interval_seconds >= self.lease_ttl_seconds:
+            raise ValueError("lease renewal interval must be shorter than lease TTL")
+        if self.retry_backoff_seconds > self.retry_backoff_max_seconds:
+            raise ValueError("retry backoff must not exceed maximum retry backoff")
+        if not self.timezone.strip():
+            raise ValueError("Celery timezone cannot be empty")
+        try:
+            ZoneInfo(self.timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("Celery timezone must be a valid IANA timezone") from exc
+        return self
+
+
+class CoordinationConfig(BaseModel):
+    """Agent-run coordination settings independent of the backing store."""
+
+    key_prefix: str = "task-manager:v1:agent-run"
+    max_connections: int = Field(default=10, ge=1)
     lease_ttl_seconds: int = Field(default=90, ge=10)
     lease_renew_interval_seconds: int = Field(default=20, ge=1)
 
@@ -120,6 +173,7 @@ class Settings(BaseSettings):
     agent: AgentConfig
     recurrence: RecurrenceConfig = RecurrenceConfig()
     key_value_store: KeyValueStoreConfig = KeyValueStoreConfig()
+    celery: CeleryConfig = CeleryConfig()
     coordination: CoordinationConfig = CoordinationConfig()
     http: HTTPConfig = HTTPConfig()
 

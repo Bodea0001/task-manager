@@ -58,7 +58,14 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         user_id: UUID,
         windows: tuple[Schedule, ...],
     ) -> None:
-        if not windows:
+        await self.materialize_recurrence_instances_for_owners((user_id,), windows)
+
+    async def materialize_recurrence_instances_for_owners(
+        self,
+        user_ids: tuple[UUID, ...],
+        windows: tuple[Schedule, ...],
+    ) -> None:
+        if not user_ids or not windows:
             return
 
         stmt = text("""
@@ -94,6 +101,21 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     VALUES ('daily'), ('weekly'), ('monthly')
                 ) AS frequency_cap(frequency)
             ),
+            owner_input AS MATERIALIZED (
+                SELECT unnest(CAST(:user_ids AS uuid[])) AS creator_id
+            ),
+            owner_template AS MATERIALIZED (
+                SELECT
+                    task_recurrence_template.template_id,
+                    task_recurrence_template.title,
+                    task_recurrence_template.description,
+                    task_recurrence_template.priority,
+                    task_recurrence_template.creator_id
+                FROM owner_input
+                JOIN task_recurrence_template
+                    ON task_recurrence_template.creator_id = owner_input.creator_id
+                WHERE task_recurrence_template.deleted_at IS NULL
+            ),
             series_window AS (
                 SELECT
                     task_recurrence_series.series_id,
@@ -118,24 +140,22 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     task_recurrence_month_rule.weekday AS month_weekday,
                     task_recurrence_month_rule.business_day_policy::varchar
                         AS business_day_policy,
-                    task_recurrence_template.title,
-                    task_recurrence_template.description,
-                    task_recurrence_template.priority,
-                    task_recurrence_template.creator_id,
+                    owner_template.title,
+                    owner_template.description,
+                    owner_template.priority,
+                    owner_template.creator_id,
                     requested_window.starts_on,
                     requested_window.ends_on
-                FROM task_recurrence_series
-                JOIN task_recurrence_template
-                    ON task_recurrence_template.template_id = task_recurrence_series.template_id
+                FROM owner_template
+                JOIN task_recurrence_series
+                    ON task_recurrence_series.template_id = owner_template.template_id
                 LEFT JOIN task_recurrence_month_rule
                     ON task_recurrence_month_rule.series_id = task_recurrence_series.series_id
                 JOIN requested_window
                     ON requested_window.frequency = task_recurrence_series.frequency::varchar
                     AND requested_window.ends_on >= task_recurrence_series.anchor_date
                 WHERE
-                    task_recurrence_template.creator_id = :user_id
-                    AND task_recurrence_template.deleted_at IS NULL
-                    AND task_recurrence_series.deleted_at IS NULL
+                    task_recurrence_series.deleted_at IS NULL
                     AND task_recurrence_series.generation_finished_at IS NULL
             ),
             candidate AS MATERIALIZED (
@@ -200,18 +220,28 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                             existing_instance.series_id = series_window.series_id
                             AND existing_instance.sequence_no = occurrence.sequence_no
                             AND existing_instance.deleted_at IS NULL
-                )
+                    )
                 ORDER BY series_id, sequence_no, ends_on DESC
             ),
             blocking_schedule AS MATERIALIZED (
-                SELECT scheduled_task.starts_at, scheduled_task.ends_at
+                SELECT
+                    blocking_task.creator_id,
+                    scheduled_task.starts_at,
+                    scheduled_task.ends_at
                 FROM scheduled_task
-                JOIN task ON task.task_id = scheduled_task.task_id
+                CROSS JOIN LATERAL (
+                    SELECT task.creator_id
+                    FROM task
+                    WHERE
+                        task.task_id = scheduled_task.task_id
+                        AND task.deleted_at IS NULL
+                        AND task.status != 'cancelled'
+                    OFFSET 0
+                ) AS blocking_task
+                JOIN owner_input
+                    ON owner_input.creator_id = blocking_task.creator_id
                 WHERE
-                    task.creator_id = :user_id
-                    AND task.deleted_at IS NULL
-                    AND task.status != 'cancelled'
-                    AND tsrange(
+                    tsrange(
                         scheduled_task.starts_at,
                         scheduled_task.ends_at,
                         '[)'
@@ -228,7 +258,8 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 SELECT DISTINCT candidate.series_id, candidate.sequence_no
                 FROM candidate
                 JOIN blocking_schedule
-                    ON blocking_schedule.starts_at < candidate.planned_ends_at
+                    ON blocking_schedule.creator_id = candidate.creator_id
+                    AND blocking_schedule.starts_at < candidate.planned_ends_at
                     AND blocking_schedule.ends_at > candidate.planned_starts_at
                 WHERE
                     candidate.has_schedule
@@ -369,7 +400,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     ON task_recurrence_template_tag.template_id = task_values.template_id
                 JOIN tag
                     ON tag.tag_id = task_recurrence_template_tag.tag_id
-                    AND tag.creator_id = :user_id
+                    AND tag.creator_id = task_values.creator_id
                     AND tag.deleted_at IS NULL
                 ON CONFLICT (task_id, tag_id) DO NOTHING
                 RETURNING task_id
@@ -379,6 +410,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 (SELECT count(*) FROM inserted_conflict) AS conflict_count,
                 (SELECT count(*) FROM resolved_conflict) AS resolved_conflict_count
         """).bindparams(
+            bindparam("user_ids", type_=ARRAY(Uuid(as_uuid=True))),
             bindparam("window_starts", type_=ARRAY(TIMESTAMP(timezone=False))),
             bindparam("window_ends", type_=ARRAY(TIMESTAMP(timezone=False))),
         )
@@ -386,7 +418,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
         await self.session.execute(
             stmt,
             {
-                "user_id": user_id,
+                "user_ids": user_ids,
                 "window_starts": [window.starts_at for window in windows],
                 "window_ends": [window.ends_at for window in windows],
                 "daily_materialization_days": settings.recurrence.daily_materialization_days,
@@ -792,23 +824,26 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
     async def get_recurrence_owner_ids_requiring_materialization(
         self, window: Schedule
     ) -> tuple[UUID, ...]:
-        max_sequence_no = (
-            select(func.max(TaskRecurrenceInstanceModel.sequence_no))
+        last_instance_sequence = (
+            select(TaskRecurrenceInstanceModel.sequence_no.label("sequence_no"))
             .where(
+                TaskRecurrenceSeriesModel.max_occurrences.is_not(None),
                 TaskRecurrenceInstanceModel.series_id == TaskRecurrenceSeriesModel.series_id,
                 TaskRecurrenceInstanceModel.deleted_at.is_(None),
             )
-            .correlate(TaskRecurrenceSeriesModel)
-            .scalar_subquery()
+            .order_by(TaskRecurrenceInstanceModel.sequence_no.desc())
+            .limit(1)
+            .lateral("last_instance_sequence")
         )
-        max_planned_starts_at = (
-            select(func.max(TaskRecurrenceInstanceModel.planned_starts_at))
+        last_instance_time = (
+            select(TaskRecurrenceInstanceModel.planned_starts_at.label("planned_starts_at"))
             .where(
                 TaskRecurrenceInstanceModel.series_id == TaskRecurrenceSeriesModel.series_id,
                 TaskRecurrenceInstanceModel.deleted_at.is_(None),
             )
-            .correlate(TaskRecurrenceSeriesModel)
-            .scalar_subquery()
+            .order_by(TaskRecurrenceInstanceModel.planned_starts_at.desc())
+            .limit(1)
+            .lateral("last_instance_time")
         )
         stmt = (
             select(TaskRecurrenceTemplateModel.creator_id)
@@ -816,6 +851,8 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 TaskRecurrenceSeriesModel,
                 TaskRecurrenceSeriesModel.template_id == TaskRecurrenceTemplateModel.template_id,
             )
+            .outerjoin(last_instance_sequence, literal(True))
+            .outerjoin(last_instance_time, literal(True))
             .where(
                 TaskRecurrenceTemplateModel.deleted_at.is_(None),
                 TaskRecurrenceSeriesModel.deleted_at.is_(None),
@@ -828,11 +865,14 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                 (
                     TaskRecurrenceSeriesModel.max_occurrences.is_(None)
                     | (
-                        func.coalesce(max_sequence_no, 0)
+                        func.coalesce(last_instance_sequence.c.sequence_no, 0)
                         < TaskRecurrenceSeriesModel.max_occurrences
                     )
                 ),
-                (max_planned_starts_at.is_(None) | (max_planned_starts_at < window.ends_at)),
+                (
+                    last_instance_time.c.planned_starts_at.is_(None)
+                    | (last_instance_time.c.planned_starts_at < window.ends_at)
+                ),
             )
             .distinct()
             .order_by(TaskRecurrenceTemplateModel.creator_id)

@@ -224,6 +224,10 @@ distributed coordination and background delivery:
 TASK_CONFIG_KEY_VALUE_STORE_URL=redis://localhost:6379/0
 ```
 
+The same store backs agent-run leases, Celery message delivery, and background
+job coordination. Namespaced keys keep these responsibilities isolated without
+requiring a separate Redis database for each operation.
+
 Configure the assistant model before running agent code:
 
 ```bash
@@ -284,6 +288,23 @@ Run the HTTP API with Granian:
 uv run granian --interface asgi --working-dir src/task_manager \
   --log-config src/task_manager/granian_logging.json --no-access-log main:app
 ```
+
+Run the background worker and one scheduler in separate processes:
+
+```bash
+cd src/task_manager
+uv run celery -A workers.app:celery_app worker \
+  --queues recurrence_materialization --loglevel INFO
+uv run celery -A workers.app:celery_app beat --loglevel INFO
+```
+
+Recurring-task horizons are extended once per day at 02:00 UTC by default.
+Override the fixed schedule with
+`TASK_CONFIG_CELERY_RECURRENCE_MATERIALIZATION_HOUR`,
+`TASK_CONFIG_CELERY_RECURRENCE_MATERIALIZATION_MINUTE`, and
+`TASK_CONFIG_CELERY_TIMEZONE`. Run only one Beat scheduler for this schedule;
+additional worker processes consume the shared queue and must not start their
+own scheduler.
 
 The application API is available under `/api/v1` by default. Interactive API
 documentation is available at `/docs` and `/redoc`, with the OpenAPI document at

@@ -376,6 +376,12 @@ class TaskRecurrenceInstance(Base):
         Index(
             "ix_task_recurrence_instance_series_sequence", "series_id", "sequence_no", unique=True
         ),
+        Index(
+            "ix_task_recurrence_instance_active_series_planned_start",
+            "series_id",
+            "planned_starts_at",
+            postgresql_where=deleted_at.is_(None),
+        ),
         Index("ix_task_recurrence_instance_task_id", "task_id", unique=True),
         Index("ix_task_recurrence_instance_planned_date", "planned_date"),
         Index("ix_task_recurrence_instance_planned_time", "planned_starts_at", "planned_ends_at"),

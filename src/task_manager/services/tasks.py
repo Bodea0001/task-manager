@@ -1,5 +1,6 @@
 from uuid import UUID
 from typing import Any
+from itertools import batched
 from datetime import datetime, timedelta
 from collections.abc import Iterable
 
@@ -32,8 +33,13 @@ from domain.value_objects.audit import AuditEvent, AuditEntityType, AuditEventTy
 class TaskService:
     """Application service with task operations intended for agent tools/use cases."""
 
-    def __init__(self, uow: SQLAlchemyUnitOfWork) -> None:
+    def __init__(
+        self,
+        uow: SQLAlchemyUnitOfWork,
+        recurrence_materialization_batch_size: int = 20,
+    ) -> None:
         self.uow = uow
+        self._recurrence_materialization_batch_size = recurrence_materialization_batch_size
 
     # Tasks
 
@@ -441,8 +447,12 @@ class TaskService:
                 schedule_windows[0]
             )
 
-        for user_id in user_ids:
-            await self.materialize_recurrence_instances(user_id, schedule_windows)
+        for user_id_batch in batched(user_ids, self._recurrence_materialization_batch_size):
+            async with self.uow() as uow:
+                await uow.task.materialize_recurrence_instances_for_owners(
+                    user_id_batch,
+                    schedule_windows,
+                )
 
         return len(user_ids)
 
