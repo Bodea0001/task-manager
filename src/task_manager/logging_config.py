@@ -40,7 +40,7 @@ class JSONLogFormatter(logging.Formatter):
                 if name not in _STANDARD_LOG_RECORD_FIELDS and not name.startswith("_")
             }
         )
-        if record.exc_info is not None:
+        if isinstance(record.exc_info, tuple):
             payload["exception"] = self.formatException(record.exc_info)
         if record.stack_info:
             payload["stack"] = self.formatStack(record.stack_info)
