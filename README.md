@@ -185,13 +185,12 @@ Implemented product areas:
   management, chat lifecycle and history, streamed assistant requests, and
   manual task, tag, schedule-inspection, and recurring-task workflows for
   clients that need direct, predictable controls.
+- Frontend: responsive direct task management, weekly calendar, recurring-task
+  workflows, assistant chat, English and Russian localization, theme settings,
+  and installable PWA behavior.
 
 The codebase includes domain models, DTOs, repositories, services, database
-migrations, and tests.
-
-Not included yet:
-
-- Production user interface.
+migrations, the production frontend, and tests.
 
 ## Development
 
@@ -317,3 +316,15 @@ must run against a dedicated test database: `TASK_CONFIG_DB_NAME` must contain a
 separate `test`, `testing` or `pytest` part, for example `task_manager_test`.
 Redis tests isolate their keys with a unique prefix. The integration test
 fixtures truncate application tables before and after each test.
+
+## Continuous Integration
+
+GitHub Actions validates backend formatting, linting, types, unit tests, and
+integration behavior against isolated PostgreSQL and Redis services. It also
+checks frontend linting and tests, then creates a production build and verifies
+its bundle-size budgets.
+
+E2E tests are intentionally excluded from required CI checks because some
+scenarios depend on an external model provider and natural-language model
+behavior. Run them manually with the opt-in command documented above when the
+required services and model access are available.
