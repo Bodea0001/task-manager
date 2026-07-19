@@ -51,6 +51,14 @@ class LoginUser:
 
 
 @dataclass(frozen=True, slots=True)
+class VerifyUserEmailData:
+    email: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "email", normalize_email(self.email))
+
+
+@dataclass(frozen=True, slots=True)
 class UpdateUserData:
     first_name: str | None = None
     last_name: str | None = None

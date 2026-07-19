@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from dto.users import LoginUser, RegisterUser, UpdateUserData
+from dto.users import VerifyUserEmailData
 from exceptions import EmailAlreadyExists, InvalidCredentials, InvalidToken
 from services.auth import AuthService
 from services.users import UserService
@@ -35,6 +36,29 @@ async def test_user_can_register_and_get_current_user(auth_service: AuthService)
     assert current_user.email_verified is False
     assert current_user.first_name == "New"
     assert current_user.last_name == "User"
+
+
+@pytest.mark.asyncio
+async def test_trusted_administration_can_verify_user_email(
+    auth_service: AuthService,
+    user_service: UserService,
+) -> None:
+    tokens = await auth_service.register(
+        RegisterUser(
+            email="admin-verified@example.com",
+            password="correct-password",
+            first_name="Admin",
+            last_name="Verified",
+        )
+    )
+
+    verified_user = await user_service.verify_user_email(
+        VerifyUserEmailData(" ADMIN-VERIFIED@example.com ")
+    )
+    current_user = await auth_service.get_current_user(tokens.access_token)
+
+    assert verified_user.email_verified is True
+    assert current_user.email_verified is True
 
 
 @pytest.mark.asyncio

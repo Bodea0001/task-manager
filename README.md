@@ -292,6 +292,14 @@ Apply database migrations:
 uv run alembic upgrade head
 ```
 
+Trusted administrators can verify an existing account from the application
+source directory. The operation is safe to repeat:
+
+```bash
+cd src/task_manager
+uv run python -m cli users verify-email user@example.com
+```
+
 Run the HTTP API with Granian:
 
 ```bash

@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 
 import asyncpg
-from sqlalchemy import case, insert, literal, select, update
+from sqlalchemy import case, func, insert, literal, select, update
 from sqlalchemy.exc import IntegrityError, NoResultFound
 
 import exceptions as app_exc
@@ -136,6 +136,34 @@ class UserRepository(SQLAlchemyRepository):
             raise app_exc.UserNotFound
         if not email_verified:
             raise app_exc.EmailVerificationRequired
+
+    @translate_repository_errors
+    async def verify_email(self, email: str) -> User:
+        verified_user = (
+            update(UserEmailVerificationModel)
+            .values(
+                verified_at=func.coalesce(
+                    UserEmailVerificationModel.verified_at,
+                    func.now(),
+                )
+            )
+            .where(
+                UserEmailVerificationModel.user_id
+                == select(UserModel.user_id).where(UserModel.email == email).scalar_subquery()
+            )
+            .returning(
+                UserEmailVerificationModel.user_id,
+                UserEmailVerificationModel.verified_at,
+            )
+            .cte("verified_user")
+        )
+        stmt = select(UserModel, verified_user.c.verified_at).join(
+            verified_user, verified_user.c.user_id == UserModel.user_id
+        )
+
+        result = await self.session.execute(stmt)
+        model, verified_at = result.one()
+        return self._model_to_user(model, email_verified=verified_at is not None)
 
     async def get_hashed_password_by_email(self, email: str) -> str | None:
         stmt = (

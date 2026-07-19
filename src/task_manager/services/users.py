@@ -2,7 +2,7 @@ from uuid import UUID
 
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from domain.value_objects.users import User
-from dto.users import UpdateUserData
+from dto.users import UpdateUserData, VerifyUserEmailData
 
 
 class UserService:
@@ -20,3 +20,8 @@ class UserService:
     async def require_email_verified(self, user_id: UUID) -> None:
         async with self.uow(read_only=True) as uow:
             await uow.user.require_email_verified(user_id)
+
+    async def verify_user_email(self, data: VerifyUserEmailData) -> User:
+        """Mark an existing user's email as verified for trusted administration."""
+        async with self.uow() as uow:
+            return await uow.user.verify_email(data.email)
