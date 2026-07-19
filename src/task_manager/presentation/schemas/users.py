@@ -13,7 +13,7 @@ from pydantic import (
 from dto.users import UpdateUserData
 from domain.users import normalize_name, normalize_optional_name
 from domain.value_objects.users import User
-from domain.value_objects.agent_usage import AgentRunAllowance
+from domain.value_objects.agent_usage import AgentAccessLevel, AgentRunAllowance
 
 
 class UpdateUserRequest(BaseModel):
@@ -88,13 +88,15 @@ class AgentRunAllowanceResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     used: int
-    limit: int
-    remaining: int
+    access_level: AgentAccessLevel
+    limit: int | None
+    remaining: int | None
 
     @classmethod
     def from_domain(cls, allowance: AgentRunAllowance) -> "AgentRunAllowanceResponse":
         return cls(
             used=allowance.used,
+            access_level=allowance.access_level,
             limit=allowance.limit,
             remaining=allowance.remaining,
         )

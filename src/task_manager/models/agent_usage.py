@@ -2,16 +2,37 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index
+from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TIMESTAMP, Uuid
 
 from models.base import Base
 from models.dependencies import created_at
-from domain.value_objects.agent_usage import AgentRunUsageStatus
+from domain.value_objects.agent_usage import AgentAccessLevel, AgentRunUsageStatus
 
 if TYPE_CHECKING:
     from models.users import User
+
+
+class UserAgentAccess(Base):
+    __tablename__ = "user_agent_access"
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("user.user_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    access_level: Mapped[AgentAccessLevel] = mapped_column(
+        Enum(
+            AgentAccessLevel,
+            values_callable=lambda enum: [item.value for item in enum],
+            name="agent_access_level",
+        ),
+        nullable=False,
+        server_default=text("'limited'"),
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="agent_access")
 
 
 class UserAgentRunUsage(Base):

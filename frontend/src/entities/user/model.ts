@@ -7,8 +7,20 @@ export interface User {
   email_verified: boolean
 }
 
-export interface AgentRunAllowance {
+export type AgentAccessLevel = 'limited' | 'unmetered'
+
+interface AgentRunAllowanceBase {
   used: number
-  limit: number
-  remaining: number
 }
+
+export type AgentRunAllowance =
+  | (AgentRunAllowanceBase & {
+      access_level: 'limited'
+      limit: number
+      remaining: number
+    })
+  | (AgentRunAllowanceBase & {
+      access_level: 'unmetered'
+      limit: null
+      remaining: null
+    })

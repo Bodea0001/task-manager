@@ -148,7 +148,8 @@ export function ChatWorkspace(props: {
     queryFn: getAgentRunAllowance,
   }))
   const allowance = () => allowanceQuery.data
-  const isQuotaExhausted = () => allowance()?.remaining === 0
+  const isQuotaExhausted = () =>
+    allowance()?.access_level === 'limited' && allowance()?.remaining === 0
   const chats = createMemo(() => chatsQuery.data?.chats || [])
   const selectedChat = createMemo(() =>
     chats().find((chat) => chat.chat_id === selectedChatId()),
@@ -791,27 +792,32 @@ export function ChatWorkspace(props: {
                 {t('chat.composer.hint')}
               </span>
               <Show keyed when={allowance()}>
-                {(currentAllowance) => (
-                  <span
-                    class="chat-composer-allowance"
-                    classList={{
-                      'chat-composer-allowance--exhausted':
-                        currentAllowance.remaining === 0,
-                    }}
-                  >
-                    {t(
-                      currentAllowance.remaining === 0
-                        ? props.emailVerified
-                          ? 'chat.composer.quotaExhausted'
-                          : 'chat.composer.quotaExhaustedUnverified'
-                        : 'chat.composer.allowance',
-                      {
-                        count: currentAllowance.remaining,
-                        limit: currentAllowance.limit,
-                      },
-                    )}
-                  </span>
-                )}
+                {(currentAllowance) => {
+                  const exhausted =
+                    currentAllowance.access_level === 'limited' &&
+                    currentAllowance.remaining === 0
+                  return (
+                    <span
+                      class="chat-composer-allowance"
+                      classList={{
+                        'chat-composer-allowance--exhausted': exhausted,
+                      }}
+                    >
+                      {currentAllowance.access_level === 'unmetered'
+                        ? t('chat.composer.unmetered')
+                        : exhausted
+                          ? t(
+                              props.emailVerified
+                                ? 'chat.composer.quotaExhausted'
+                                : 'chat.composer.quotaExhaustedUnverified',
+                            )
+                          : t('chat.composer.allowance', {
+                              count: currentAllowance.remaining,
+                              limit: currentAllowance.limit,
+                            })}
+                    </span>
+                  )
+                }}
               </Show>
             </div>
             <button
@@ -1138,6 +1144,7 @@ function storeExhaustedAllowance(
   if (typeof context.used !== 'number' || typeof context.limit !== 'number') return
   queryClient.setQueryData<AgentRunAllowance>(AGENT_RUN_ALLOWANCE_QUERY_KEY, {
     used: context.used,
+    access_level: 'limited',
     limit: context.limit,
     remaining: 0,
   })

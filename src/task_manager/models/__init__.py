@@ -1,6 +1,6 @@
 from models.base import Base
 from models.audit import AuditEvent
-from models.agent_usage import UserAgentRunUsage
+from models.agent_usage import UserAgentAccess, UserAgentRunUsage
 from models.chats import Chat, ChatMessage
 from models.tags import Tag
 from models.task_tags import TaskRecurrenceTemplateTag, TaskTag
@@ -37,6 +37,7 @@ __all__ = [
     "TaskStore",
     "Task",
     "User",
+    "UserAgentAccess",
     "UserAgentRunUsage",
     "UserAuth",
     "UserEmailVerification",

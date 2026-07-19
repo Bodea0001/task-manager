@@ -22,6 +22,7 @@ TEST_DATABASE_NAME_PARTS = {"test", "testing", "pytest"}
 TEST_TABLES = (
     "audit_event",
     "user_agent_run_usage",
+    "user_agent_access",
     "user_refresh_token",
     "chat_message",
     "task_recurrence_instance_override",
@@ -176,6 +177,13 @@ async def _create_test_user(engine: AsyncEngine, user_id: UUID, email: str) -> N
             text("""
                 INSERT INTO user_email_verification(user_id, verified_at)
                 VALUES (:user_id, CURRENT_TIMESTAMP)
+            """),
+            {"user_id": user_id},
+        )
+        await connection.execute(
+            text("""
+                INSERT INTO user_agent_access(user_id, access_level)
+                VALUES (:user_id, 'limited')
             """),
             {"user_id": user_id},
         )

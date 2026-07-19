@@ -19,6 +19,7 @@ from models.users import (
 from models.users import UserRefreshToken as UserRefreshTokenModel
 from domain.value_objects.users import User, RefreshTokenSession
 from adapters.repository import SQLAlchemyRepository
+from models.agent_usage import UserAgentAccess
 
 
 USER_EMAIL_CONSTRAINT = "uq_user_email"
@@ -79,7 +80,17 @@ class UserRepository(SQLAlchemyRepository):
             )
             .cte("new_verification")
         )
-        stmt = select(new_user).add_cte(new_auth).add_cte(new_verification)
+        new_agent_access = (
+            insert(UserAgentAccess)
+            .from_select(
+                [UserAgentAccess.user_id],
+                select(new_user.c.user_id),
+            )
+            .cte("new_agent_access")
+        )
+        stmt = (
+            select(new_user).add_cte(new_auth).add_cte(new_verification).add_cte(new_agent_access)
+        )
 
         result = await self.session.execute(stmt)
         row = result.one()

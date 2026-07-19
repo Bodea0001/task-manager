@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from models.chats import Chat
     from models.tags import Tag
     from models.tasks import Task
-    from models.agent_usage import UserAgentRunUsage
+    from models.agent_usage import UserAgentAccess, UserAgentRunUsage
 
 
 class User(Base):
@@ -38,6 +38,12 @@ class User(Base):
     )
     agent_run_usage: Mapped[list["UserAgentRunUsage"]] = relationship(
         "UserAgentRunUsage", back_populates="user", cascade="all, delete-orphan"
+    )
+    agent_access: Mapped["UserAgentAccess"] = relationship(
+        "UserAgentAccess",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
     refresh_tokens: Mapped[list["UserRefreshToken"]] = relationship(
         "UserRefreshToken", back_populates="user", cascade="all, delete-orphan"

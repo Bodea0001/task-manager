@@ -247,6 +247,11 @@ Only one assistant request can run in the same conversation at a time. A second
 attempt receives a clear in-progress message instead of starting a competing
 operation.
 
+The composer shows the assistant allowance associated with the account. Limited
+accounts see the number of requests remaining and cannot submit another request
+after the allowance is exhausted. Accounts with unmetered access see a clear
+unlimited-access label instead of an artificial numeric counter.
+
 Drafts are stored independently for each user and conversation. They survive
 route changes, panel collapse, and page reloads within the same browser tab, but
 are removed when the authenticated session ends or the tab is closed.

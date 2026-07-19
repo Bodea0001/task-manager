@@ -300,6 +300,15 @@ cd src/task_manager
 uv run python -m cli users verify-email user@example.com
 ```
 
+Agent access is quota-limited by default. A trusted administrator can remove
+the product quota for a test account without disabling concurrency controls or
+usage accounting, and can restore the normal quota later:
+
+```bash
+uv run python -m cli users set-agent-access user@example.com unmetered
+uv run python -m cli users set-agent-access user@example.com limited
+```
+
 Run the HTTP API with Granian:
 
 ```bash

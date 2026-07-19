@@ -3,7 +3,8 @@ from uuid import UUID
 
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from config import AgentUsageConfig, settings
-from domain.value_objects.agent_usage import AgentRunAllowance, AgentRunReservation
+from dto.agent_usage import SetAgentAccessData
+from domain.value_objects.agent_usage import AgentAccess, AgentRunAllowance, AgentRunReservation
 
 
 class AgentUsageService:
@@ -45,3 +46,8 @@ class AgentUsageService:
                 verified_limit=self.config.verified_run_limit,
                 now=datetime.now(UTC),
             )
+
+    async def set_access_level(self, data: SetAgentAccessData) -> AgentAccess:
+        """Set agent access for a user through a trusted administrative adapter."""
+        async with self.uow() as uow:
+            return await uow.agent_usage.set_access_level(data.email, data.access_level)

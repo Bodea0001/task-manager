@@ -40,6 +40,7 @@ export const chat = {
     allowance_few: '{{count}} of {{limit}} assistant requests available',
     allowance_many: '{{count}} of {{limit}} assistant requests available',
     allowance_other: '{{count}} of {{limit}} assistant requests available',
+    unmetered: 'Unlimited assistant requests',
     quotaExhausted: 'The assistant request limit has been reached.',
     quotaExhaustedUnverified:
       'The assistant request limit has been reached. Verify your email to increase it.',

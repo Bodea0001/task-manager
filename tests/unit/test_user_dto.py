@@ -1,7 +1,9 @@
 import pytest
 
 from domain.auth import PasswordHasher
+from dto.agent_usage import SetAgentAccessData
 from dto.users import LoginUser, RegisterUser, UpdateUserData
+from domain.value_objects.agent_usage import AgentAccessLevel
 
 
 def test_register_user_data_is_normalized() -> None:
@@ -98,6 +100,16 @@ def test_login_user_email_is_normalized() -> None:
     # Assert
     assert data.email == "user.name@example.com"
     assert data.password == "correct-password"
+
+
+def test_agent_access_target_email_is_normalized() -> None:
+    data = SetAgentAccessData(
+        email="  User.Name@Example.COM ",
+        access_level=AgentAccessLevel.UNMETERED,
+    )
+
+    assert data.email == "user.name@example.com"
+    assert data.access_level is AgentAccessLevel.UNMETERED
 
 
 def test_user_update_data_is_normalized() -> None:

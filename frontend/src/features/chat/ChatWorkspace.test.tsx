@@ -22,7 +22,12 @@ describe('chat workspace', () => {
       vi.fn((input: RequestInfo | URL) =>
         Promise.resolve(
           String(input).endsWith('/users/me/agent/usage')
-            ? jsonResponse({ used: 0, limit: 10, remaining: 10 })
+            ? jsonResponse({
+                used: 0,
+                access_level: 'limited',
+                limit: 10,
+                remaining: 10,
+              })
             : jsonResponse({ chats: [], next_offset: null }),
         ),
       ),
@@ -32,6 +37,31 @@ describe('chat workspace', () => {
     expect(
       await screen.findByText('Доступно 10 из 10 запросов к ассистенту'),
     ).toBeVisible()
+  })
+
+  it('keeps the assistant available for unmetered accounts', async () => {
+    await changeLocale('ru')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).endsWith('/users/me/agent/usage')
+            ? jsonResponse({
+                used: 42,
+                access_level: 'unmetered',
+                limit: null,
+                remaining: null,
+              })
+            : jsonResponse({ chats: [], next_offset: null }),
+        ),
+      ),
+    )
+    renderChatWorkspace()
+
+    expect(
+      await screen.findByText('Запросы к ассистенту без ограничений'),
+    ).toBeVisible()
+    expect(screen.getByRole('textbox')).toBeEnabled()
   })
 
   it('uses a dismissible conversation drawer on compact screens', async () => {
@@ -359,8 +389,18 @@ describe('chat workspace', () => {
         return Promise.resolve(
           jsonResponse(
             agentCompleted
-              ? { used: 7, limit: 7, remaining: 0 }
-              : { used: 6, limit: 7, remaining: 1 },
+              ? {
+                  used: 7,
+                  access_level: 'limited',
+                  limit: 7,
+                  remaining: 0,
+                }
+              : {
+                  used: 6,
+                  access_level: 'limited',
+                  limit: 7,
+                  remaining: 1,
+                },
           ),
         )
       }
@@ -418,7 +458,12 @@ describe('chat workspace', () => {
       }
       if (url.endsWith('/users/me/agent/usage')) {
         return Promise.resolve(
-          jsonResponse({ used: 4, limit: 4, remaining: 0 }),
+          jsonResponse({
+            used: 4,
+            access_level: 'limited',
+            limit: 4,
+            remaining: 0,
+          }),
         )
       }
       return Promise.resolve(jsonResponse({ messages: [], next_offset: null }))

@@ -8,12 +8,14 @@ from sqlalchemy.exc import NoResultFound
 import exceptions as app_exc
 from adapters.repository import SQLAlchemyRepository
 from domain.value_objects.agent_usage import (
+    AgentAccess,
+    AgentAccessLevel,
     AgentRunAllowance,
     AgentRunReservation,
     AgentRunUsageStatus,
 )
-from models.agent_usage import UserAgentRunUsage
-from models.users import UserEmailVerification
+from models.agent_usage import UserAgentAccess, UserAgentRunUsage
+from models.users import User, UserEmailVerification
 
 
 class AgentUsageRepository(SQLAlchemyRepository):
@@ -29,18 +31,19 @@ class AgentUsageRepository(SQLAlchemyRepository):
         expires_at: datetime,
     ) -> AgentRunReservation:
         try:
-            verified_at = await self._lock_verification_state(user_id)
+            verified_at, access_level = await self._lock_access_state(user_id)
         except NoResultFound:
             raise app_exc.UserNotFound from None
 
         limit = verified_limit if verified_at is not None else unverified_limit
-        active_usage = self._active_usage_count(user_id, now)
         candidate = select(
             literal(run_id),
             literal(user_id),
             literal(AgentRunUsageStatus.RESERVED.value),
             literal(expires_at),
-        ).where(active_usage < limit)
+        )
+        if access_level is AgentAccessLevel.LIMITED:
+            candidate = candidate.where(self._active_usage_count(user_id, now) < limit)
         stmt = (
             insert(UserAgentRunUsage)
             .from_select(
@@ -63,8 +66,31 @@ class AgentUsageRepository(SQLAlchemyRepository):
         if existing is not None:
             return existing
 
+        if access_level is AgentAccessLevel.UNMETERED:
+            raise RuntimeError("Unmetered agent usage reservation could not be persisted")
+
         used = await self._get_active_usage_count(user_id, now)
         raise app_exc.AgentQuotaExhausted(used=used, limit=limit)
+
+    async def set_access_level(
+        self,
+        email: str,
+        access_level: AgentAccessLevel,
+    ) -> AgentAccess:
+        stmt = (
+            update(UserAgentAccess)
+            .values(access_level=access_level)
+            .where(
+                UserAgentAccess.user_id
+                == select(User.user_id).where(User.email == email).scalar_subquery()
+            )
+            .returning(UserAgentAccess.user_id, UserAgentAccess.access_level)
+        )
+        result = await self.session.execute(stmt)
+        row = result.one_or_none()
+        if row is None:
+            raise app_exc.UserNotFound
+        return AgentAccess(user_id=row.user_id, access_level=row.access_level)
 
     async def consume(self, run_id: UUID, user_id: UUID, now: datetime) -> None:
         await self._finish(
@@ -89,30 +115,55 @@ class AgentUsageRepository(SQLAlchemyRepository):
         verified_limit: int,
         now: datetime,
     ) -> AgentRunAllowance:
-        stmt = select(
-            UserEmailVerification.verified_at,
-            self._active_usage_count(user_id, now).label("used"),
-        ).where(UserEmailVerification.user_id == user_id)
+        stmt = (
+            select(
+                UserEmailVerification.verified_at,
+                UserAgentAccess.access_level,
+                self._active_usage_count(user_id, now).label("used"),
+            )
+            .join(
+                UserAgentAccess,
+                UserAgentAccess.user_id == UserEmailVerification.user_id,
+            )
+            .where(UserEmailVerification.user_id == user_id)
+        )
         result = await self.session.execute(stmt)
         row = result.one_or_none()
         if row is None:
             raise app_exc.UserNotFound
-        limit = verified_limit if row.verified_at is not None else unverified_limit
+        if row.access_level is AgentAccessLevel.UNMETERED:
+            limit = None
+            remaining = None
+        else:
+            limit = verified_limit if row.verified_at is not None else unverified_limit
+            remaining = max(limit - row.used, 0)
         return AgentRunAllowance(
             user_id=user_id,
             used=row.used,
+            access_level=row.access_level,
             limit=limit,
-            remaining=max(limit - row.used, 0),
+            remaining=remaining,
         )
 
-    async def _lock_verification_state(self, user_id: UUID) -> datetime | None:
+    async def _lock_access_state(
+        self,
+        user_id: UUID,
+    ) -> tuple[datetime | None, AgentAccessLevel]:
         stmt = (
-            select(UserEmailVerification.verified_at)
+            select(
+                UserEmailVerification.verified_at,
+                UserAgentAccess.access_level,
+            )
+            .join(
+                UserAgentAccess,
+                UserAgentAccess.user_id == UserEmailVerification.user_id,
+            )
             .where(UserEmailVerification.user_id == user_id)
-            .with_for_update()
+            .with_for_update(of=(UserEmailVerification, UserAgentAccess))
         )
         result = await self.session.execute(stmt)
-        return result.scalar_one()
+        row = result.one()
+        return row.verified_at, row.access_level
 
     async def _get_existing_reservation(
         self,

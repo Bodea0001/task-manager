@@ -43,6 +43,7 @@ export const chat = {
     allowance_few: 'Доступно {{count}} из {{limit}} запросов к ассистенту',
     allowance_many: 'Доступно {{count}} из {{limit}} запросов к ассистенту',
     allowance_other: 'Доступно {{count}} из {{limit}} запросов к ассистенту',
+    unmetered: 'Запросы к ассистенту без ограничений',
     quotaExhausted: 'Лимит запросов к ассистенту исчерпан.',
     quotaExhaustedUnverified:
       'Лимит запросов к ассистенту исчерпан. Подтвердите почту, чтобы увеличить его.',

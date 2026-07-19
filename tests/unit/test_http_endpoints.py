@@ -18,7 +18,7 @@ from dto.users import UpdateUserData
 from domain.value_objects.tags import Tag
 from domain.value_objects.tasks import Task, TaskStatus
 from domain.value_objects.users import AuthTokens, User
-from domain.value_objects.agent_usage import AgentRunAllowance
+from domain.value_objects.agent_usage import AgentAccessLevel, AgentRunAllowance
 from presentation.app import create_app
 from presentation.dependencies import (
     get_auth_service,
@@ -74,7 +74,13 @@ class UpdatingUserService:
 
 
 class AgentUsageWorkflow:
-    allowance = AgentRunAllowance(user_id=UUID(int=0), used=2, limit=8, remaining=6)
+    allowance = AgentRunAllowance(
+        user_id=UUID(int=0),
+        used=2,
+        access_level=AgentAccessLevel.LIMITED,
+        limit=8,
+        remaining=6,
+    )
 
     async def get_allowance(self, user_id: UUID) -> AgentRunAllowance:
         return replace(self.allowance, user_id=user_id)
@@ -359,8 +365,51 @@ async def test_current_user_can_inspect_agent_allowance() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "used": usage.allowance.used,
+        "access_level": usage.allowance.access_level,
         "limit": usage.allowance.limit,
         "remaining": usage.allowance.remaining,
+    }
+
+
+@pytest.mark.asyncio
+async def test_unmetered_agent_allowance_has_no_product_limit() -> None:
+    user = User(
+        user_id=uuid4(),
+        first_name="First",
+        last_name="Last",
+        email="user@example.com",
+        email_verified=True,
+    )
+
+    async def authenticated_user() -> User:
+        return user
+
+    usage = AgentUsageWorkflow()
+    usage.allowance = replace(
+        usage.allowance,
+        access_level=AgentAccessLevel.UNMETERED,
+        limit=None,
+        remaining=None,
+    )
+    app = create_app()
+    app.dependency_overrides[get_current_user] = authenticated_user
+    app.dependency_overrides[get_agent_usage_service] = lambda: cast(
+        AgentUsageService,
+        usage,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/v1/users/me/agent/usage")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "used": usage.allowance.used,
+        "access_level": "unmetered",
+        "limit": None,
+        "remaining": None,
     }
 
 
