@@ -44,6 +44,10 @@ export const auth = {
   account: {
     title: 'Account',
     description: 'Update your profile details and manage the current session.',
+    emailVerified: 'Verified',
+    emailUnverified: 'Not verified',
+    verificationBenefits:
+      'Email verification is required to create recurring tasks and increases the assistant request limit.',
     signedInAs: 'Signed in as {{email}}',
     save: 'Save changes',
     saving: 'Saving changes',

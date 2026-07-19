@@ -6,7 +6,9 @@ from typing import cast
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import exceptions as app_exc
 from services.tasks import TaskService
+from services.users import UserService
 from dto.tasks import (
     AddTaskRecurrenceTemplate,
     UpdateTaskOccurrence,
@@ -19,7 +21,12 @@ from domain.value_objects.tasks import (
 )
 from domain.value_objects.users import User
 from presentation.app import create_app
-from presentation.dependencies import get_current_user, get_task_service
+from presentation.dependencies import (
+    get_current_user,
+    get_task_service,
+    get_user_service,
+    require_recurrence_expansion_access,
+)
 
 
 class RecurrenceWorkflowService:
@@ -142,13 +149,59 @@ class RecurrenceWorkflowService:
             self.rules.pop(rule.recurrence_id, None)
 
 
+class UnverifiedUserService:
+    async def require_email_verified(self, user_id: UUID) -> None:
+        raise app_exc.EmailVerificationRequired
+
+
 def _authenticated_user() -> User:
     return User(
         user_id=uuid4(),
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_unverified_user_is_rejected_before_recurrence_creation() -> None:
+    user = replace(_authenticated_user(), email_verified=False)
+    task_service = RecurrenceWorkflowService()
+
+    async def authenticated_user() -> User:
+        return user
+
+    app = create_app()
+    app.dependency_overrides[get_current_user] = authenticated_user
+    app.dependency_overrides[get_task_service] = lambda: cast(TaskService, task_service)
+    app.dependency_overrides[get_user_service] = lambda: cast(
+        UserService,
+        UnverifiedUserService(),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/recurrence-templates",
+            json={
+                "title": "Review weekly metrics",
+                "rules": [
+                    {
+                        "frequency": "weekly",
+                        "anchor_date": "2026-07-13",
+                        "default_time": "09:00:00",
+                        "weekdays": [1],
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "email_verification_required"
+    assert task_service.templates == {}
 
 
 @pytest.mark.asyncio
@@ -159,9 +212,13 @@ async def test_user_can_manage_recurring_work_through_http() -> None:
     async def authenticated_user() -> User:
         return user
 
+    async def allow_recurrence() -> None:
+        return None
+
     app = create_app()
     app.dependency_overrides[get_current_user] = authenticated_user
     app.dependency_overrides[get_task_service] = lambda: cast(TaskService, task_service)
+    app.dependency_overrides[require_recurrence_expansion_access] = allow_recurrence
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -264,6 +321,7 @@ async def test_recurrence_datetime_with_timezone_is_rejected() -> None:
         TaskService,
         RecurrenceWorkflowService(),
     )
+    app.dependency_overrides[require_recurrence_expansion_access] = lambda: None
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

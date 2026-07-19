@@ -171,16 +171,20 @@ Implemented product areas:
   availability checks, nearest open time lookup, and change history.
 - Recurring tasks: daily, selected-weekday, and monthly calendar rules,
   deadline-only or scheduled occurrences, end limits, safe recalculation,
-  skipped dates, stopping, deletion, and paginated listing.
+  skipped dates, stopping, deletion, and paginated listing. Creating or
+  expanding recurring work requires a verified account.
 - Tags and context: tag creation, renaming, removal, task tagging, contextual
   lookup, and change history.
-- Users and access: user accounts, authentication, session rotation and logout,
-  and per-user data access.
+- Users and access: user accounts, authentication, email-verification state,
+  session rotation and logout, profile updates without implicit email changes,
+  and per-user data access. Existing accounts remain verified after migration;
+  newly registered accounts start unverified.
 - Chat sessions: titled per-user conversations with paginated, persistent
   user-visible message history and strict ownership boundaries.
 - Assistant agent: natural-language task-management requests, safe service-layer
-  tool execution, progress updates, chat-bound memory, and Langfuse tracing when
-  configured.
+  tool execution, progress updates, chat-bound memory, verification-dependent
+  free usage limits, and Langfuse tracing when configured. Requests that fail
+  before the model returns a usable response do not consume the allowance.
 - HTTP API: liveness and readiness checks, authentication, current-user profile
   management, chat lifecycle and history, streamed assistant requests, and
   manual task, tag, schedule-inspection, and recurring-task workflows for
@@ -243,6 +247,12 @@ enabled by default, while subagent reasoning is disabled for tool compatibility;
 override these defaults with `TASK_CONFIG_AGENT_PLANNER_THINKING_MODE` and
 `TASK_CONFIG_AGENT_SUBAGENT_THINKING_MODE` when the provider requires different
 settings.
+
+Free assistant allowances default to 3 lifetime requests for an unverified
+account and 10 lifetime requests for a verified account. Override these product
+limits with `TASK_CONFIG_AGENT_USAGE_UNVERIFIED_RUN_LIMIT` and
+`TASK_CONFIG_AGENT_USAGE_VERIFIED_RUN_LIMIT`. A verified allowance includes
+requests already used before verification rather than adding a second quota.
 
 For local experiments, the model settings can point to any OpenAI-compatible
 tool-capable endpoint, such as a local Ollama server.

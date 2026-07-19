@@ -21,7 +21,10 @@ from agents.tools.tags import (
 from agents.schemas.state import AgentState
 from agents.schemas.result import AgentResult
 from agents.schemas.context import AgentContext
-from agents.middlewares import RepeatedToolCallGuardMiddleware
+from agents.middlewares import (
+    ApplicationErrorMiddleware,
+    RepeatedToolCallGuardMiddleware,
+)
 
 _TOOLS = (
     list_tags,
@@ -39,6 +42,7 @@ _NON_MUTATING_TOOL_NAMES = {
 }
 
 _MIDDLEWARES: Sequence[AgentMiddleware[Any, AgentContext, Any]] = (
+    ApplicationErrorMiddleware(),
     ToolCallLimitMiddleware[AgentResult, AgentContext](
         run_limit=settings.agent.max_tool_calls,
         exit_behavior="error",

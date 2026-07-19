@@ -1,5 +1,7 @@
-import LogOut from 'lucide-solid/icons/log-out'
+import CircleAlert from 'lucide-solid/icons/circle-alert'
+import CircleCheck from 'lucide-solid/icons/circle-check'
 import LoaderCircle from 'lucide-solid/icons/loader-circle'
+import LogOut from 'lucide-solid/icons/log-out'
 import UserRound from 'lucide-solid/icons/user-round'
 import { createEffect, createMemo, createSignal, Show, type JSX } from 'solid-js'
 
@@ -19,10 +21,9 @@ import { useI18n } from '@/shared/i18n/I18nProvider'
 import type { TranslationKey } from '@/shared/i18n/types'
 import { FormErrorSummary } from '@/shared/ui/FormErrorSummary'
 
-type AccountFieldName = 'email' | 'first_name' | 'last_name' | 'middle_name'
+type AccountFieldName = 'first_name' | 'last_name' | 'middle_name'
 type AccountFieldIssues = Partial<Record<AccountFieldName, InputValidationIssue>>
 const accountFieldNames: readonly AccountFieldName[] = [
-  'email',
   'first_name',
   'last_name',
   'middle_name',
@@ -34,7 +35,6 @@ export function AccountSettings() {
   const [firstName, setFirstName] = createSignal('')
   const [lastName, setLastName] = createSignal('')
   const [middleName, setMiddleName] = createSignal('')
-  const [email, setEmail] = createSignal('')
   const [fieldIssues, setFieldIssues] = createSignal<AccountFieldIssues>({})
   const [errorKey, setErrorKey] = createSignal<TranslationKey>()
   const [apiError, setApiError] = createSignal<FormApiError>()
@@ -47,7 +47,6 @@ export function AccountSettings() {
     setFirstName(user.first_name)
     setLastName(user.last_name)
     setMiddleName(user.middle_name || '')
-    setEmail(user.email)
     setFieldIssues({})
     setErrorKey()
     setApiError()
@@ -67,12 +66,10 @@ export function AccountSettings() {
     const normalizedFirstName = normalizeName(firstName())
     const normalizedLastName = normalizeName(lastName())
     const normalizedMiddleName = normalizeOptionalName(middleName())
-    const normalizedEmail = email().trim().toLowerCase()
 
     if (normalizedFirstName !== user.first_name) data.first_name = normalizedFirstName
     if (normalizedLastName !== user.last_name) data.last_name = normalizedLastName
     if (normalizedMiddleName !== user.middle_name) data.middle_name = normalizedMiddleName
-    if (normalizedEmail !== user.email) data.email = normalizedEmail
     return data
   })
   const hasChanges = () => Object.keys(updateData()).length > 0
@@ -124,6 +121,37 @@ export function AccountSettings() {
         </div>
       </header>
 
+      <div class="account-email-status">
+        <div>
+          <span>{t('auth.fields.email')}</span>
+          <strong>{auth.user()?.email}</strong>
+        </div>
+        <span
+          class="account-verification-badge"
+          classList={{
+            'account-verification-badge--verified':
+              auth.user()?.email_verified === true,
+          }}
+        >
+          <Show
+            when={auth.user()?.email_verified}
+            fallback={<CircleAlert size={14} strokeWidth={2} aria-hidden="true" />}
+          >
+            <CircleCheck size={14} strokeWidth={2} aria-hidden="true" />
+          </Show>
+          {t(
+            auth.user()?.email_verified
+              ? 'auth.account.emailVerified'
+              : 'auth.account.emailUnverified',
+          )}
+        </span>
+      </div>
+      <Show when={auth.user()?.email_verified === false}>
+        <p class="account-verification-note">
+          {t('auth.account.verificationBenefits')}
+        </p>
+      </Show>
+
       <form class="account-form" novalidate onSubmit={submit}>
         <div class="account-name-fields">
           <AccountField
@@ -168,28 +196,11 @@ export function AccountSettings() {
             clearFeedback('middle_name')
           }}
         />
-        <AccountField
-          name="email"
-          type="email"
-          label={t('auth.fields.email')}
-          autocomplete="email"
-          maxlength={320}
-          required
-          value={email()}
-          issue={fieldIssues().email}
-          serverError={apiError()?.fieldErrors.email}
-          onInput={(value) => {
-            setEmail(value)
-            clearFeedback('email')
-          }}
-        />
-
         <Show when={errorKey() !== undefined}>
           <FormErrorSummary
             error={apiError()}
             message={t(errorKey()!)}
             fieldLabels={{
-              email: t('auth.fields.email'),
               first_name: t('auth.fields.firstName'),
               last_name: t('auth.fields.lastName'),
               middle_name: t('auth.fields.middleName'),
@@ -258,7 +269,6 @@ function AccountField(props: {
   name: AccountFieldName
   onInput: (value: string) => void
   required?: boolean
-  type?: string
   value: string
 }) {
   const { t } = useI18n()
@@ -270,7 +280,7 @@ function AccountField(props: {
       <input
         id={inputId()}
         name={props.name}
-        type={props.type || 'text'}
+        type="text"
         autocomplete={props.autocomplete}
         maxlength={props.maxlength}
         required={props.required}
@@ -324,7 +334,7 @@ function requiredTrimmedIssue(input: HTMLInputElement): InputValidationIssue | u
 }
 
 function isAccountFieldName(value: string): value is AccountFieldName {
-  return ['email', 'first_name', 'last_name', 'middle_name'].includes(value)
+  return ['first_name', 'last_name', 'middle_name'].includes(value)
 }
 
 function normalizeName(value: string): string {
@@ -358,7 +368,6 @@ function formatAccountFieldError(
 
 function accountErrorKey(error: unknown): TranslationKey {
   if (!(error instanceof ApiError)) return 'auth.errors.unavailable'
-  if (error.code === 'email_already_exists') return 'auth.errors.emailExists'
   if (error.code === 'request_validation_error') return 'auth.errors.validation'
   return 'auth.errors.generic'
 }

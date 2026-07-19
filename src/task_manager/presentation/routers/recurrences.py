@@ -1,10 +1,14 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import NaiveDatetime
 
-from presentation.dependencies import CurrentUserDependency, TaskServiceDependency
+from presentation.dependencies import (
+    CurrentUserDependency,
+    TaskServiceDependency,
+    require_recurrence_expansion_access,
+)
 from presentation.schemas.audit import AuditEventListResponse
 from presentation.schemas.recurrences import (
     CreateRecurrenceRuleRequest,
@@ -44,6 +48,7 @@ async def list_recurrence_templates(
     "/recurrence-templates",
     response_model=RecurrenceTemplateResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_recurrence_expansion_access)],
 )
 async def create_recurrence_template(
     request: CreateRecurrenceTemplateRequest,
@@ -159,6 +164,7 @@ async def list_recurrence_rules(
     "/recurrence-templates/{template_id}/rules",
     response_model=RecurrenceRuleResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_recurrence_expansion_access)],
 )
 async def create_recurrence_rule(
     template_id: UUID,
@@ -177,6 +183,7 @@ async def create_recurrence_rule(
 @router.patch(
     "/recurrence-rules/{recurrence_id}",
     response_model=RecurrenceRuleResponse,
+    dependencies=[Depends(require_recurrence_expansion_access)],
 )
 async def update_recurrence_rule(
     recurrence_id: UUID,

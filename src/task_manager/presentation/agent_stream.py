@@ -13,17 +13,18 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid7
 
 from pydantic import BaseModel
 
 import exceptions as app_exc
-from agents.app import AgentApplication
+from agents.app import AgentApplication, ModelResponseCallback
 from agents.progress import AgentPlanProgressCallback, AgentPlanProgressEvent
 from agents.run_locks import AgentRunLease, AgentRunLockManager
 from agents.schemas.result import AgentResult
 from dto.chats import AddChatMessage
 from services.chats import ChatService
+from services.agent_usage import AgentUsageService
 from services.tags import TagService
 from services.tasks import TaskService
 from presentation.schemas.agent import (
@@ -45,6 +46,14 @@ logger = getLogger(__name__)
 
 class _AgentRunLeaseLost(Exception):
     pass
+
+
+class _ModelResponseTracker:
+    def __init__(self) -> None:
+        self.received = False
+
+    def mark_received(self) -> None:
+        self.received = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +125,7 @@ class AgentStreamCoordinator:
         task_service: TaskService,
         tag_service: TagService,
         chat_service: ChatService,
+        agent_usage_service: AgentUsageService,
         run_lock_manager: AgentRunLockManager,
         heartbeat_seconds: float = AGENT_STREAM_HEARTBEAT_SECONDS,
         queue_capacity: int = AGENT_STREAM_QUEUE_CAPACITY,
@@ -124,6 +134,7 @@ class AgentStreamCoordinator:
         self._task_service = task_service
         self._tag_service = tag_service
         self._chat_service = chat_service
+        self._agent_usage_service = agent_usage_service
         self._run_lock_manager = run_lock_manager
         self._heartbeat_seconds = heartbeat_seconds
         self._queue_capacity = queue_capacity
@@ -143,7 +154,11 @@ class AgentStreamCoordinator:
         if lease is None:
             raise app_exc.AgentRunInProgress
 
+        run_id = uuid7()
+        usage_reserved = False
         try:
+            await self._agent_usage_service.reserve(run_id, user_id)
+            usage_reserved = True
             await self._chat_service.add_user_message(
                 user_id,
                 chat_id,
@@ -158,11 +173,16 @@ class AgentStreamCoordinator:
                     request_id=request_id,
                     channel=channel,
                     lease=lease,
+                    run_id=run_id,
                 ),
                 name=f"agent-run-{chat_id}",
             )
         except BaseException:
-            await self._release_lease(lease, chat_id=chat_id, request_id=request_id)
+            try:
+                if usage_reserved:
+                    await self._agent_usage_service.release(run_id, user_id)
+            finally:
+                await self._release_lease(lease, chat_id=chat_id, request_id=request_id)
             raise
 
         self._tasks.add(task)
@@ -186,7 +206,11 @@ class AgentStreamCoordinator:
         request_id: str,
         channel: _AgentEventChannel,
         lease: AgentRunLease,
+        run_id: UUID,
     ) -> None:
+        model_response = _ModelResponseTracker()
+        usage_finalized = False
+
         async def publish_plan(event: AgentPlanProgressEvent) -> None:
             channel.publish(
                 _AgentStreamEvent(
@@ -195,6 +219,13 @@ class AgentStreamCoordinator:
                 )
             )
 
+        async def finalize_usage() -> None:
+            nonlocal usage_finalized
+            if usage_finalized:
+                return
+            usage_finalized = True
+            await self._finalize_usage(run_id, user_id, consume=model_response.received)
+
         try:
             result = await self._invoke_agent_with_lease(
                 lease,
@@ -202,7 +233,9 @@ class AgentStreamCoordinator:
                 user_id=user_id,
                 chat_id=chat_id,
                 plan_progress_callback=publish_plan,
+                model_response_callback=model_response.mark_received,
             )
+            await finalize_usage()
             await self._chat_service.add_assistant_message(
                 user_id,
                 chat_id,
@@ -248,6 +281,8 @@ class AgentStreamCoordinator:
             )
             raise
         except Exception as exc:
+            if not usage_finalized:
+                await finalize_usage()
             error_code, error_message = _agent_stream_error(exc)
             logger.error(
                 "event=agent_stream_completed request_id=%s user_id=%s chat_id=%s "
@@ -278,7 +313,11 @@ class AgentStreamCoordinator:
                 )
             )
         finally:
-            await self._release_lease(lease, chat_id=chat_id, request_id=request_id)
+            try:
+                if not usage_finalized:
+                    await finalize_usage()
+            finally:
+                await self._release_lease(lease, chat_id=chat_id, request_id=request_id)
 
     async def _invoke_agent_with_lease(
         self,
@@ -288,6 +327,7 @@ class AgentStreamCoordinator:
         user_id: UUID,
         chat_id: UUID,
         plan_progress_callback: AgentPlanProgressCallback,
+        model_response_callback: ModelResponseCallback,
     ) -> AgentResult:
         agent_task = create_task(
             self._agent.run(
@@ -297,6 +337,7 @@ class AgentStreamCoordinator:
                 self._task_service,
                 self._tag_service,
                 plan_progress_callback=plan_progress_callback,
+                model_response_callback=model_response_callback,
             )
         )
         renewal_task = create_task(self._renew_lease(lease))
@@ -321,6 +362,12 @@ class AgentStreamCoordinator:
             await sleep(lease.renew_interval_seconds)
             if not await lease.renew():
                 raise _AgentRunLeaseLost
+
+    async def _finalize_usage(self, run_id: UUID, user_id: UUID, *, consume: bool) -> None:
+        if consume:
+            await self._agent_usage_service.consume(run_id, user_id)
+        else:
+            await self._agent_usage_service.release(run_id, user_id)
 
     @staticmethod
     async def _release_lease(

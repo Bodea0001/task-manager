@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import (
 import exceptions as app_exc
 from domain.value_objects.isolation_level import IsolationLevel
 from adapters.repositories.audit_repository import AuditRepository
+from adapters.repositories.agent_usage_repository import AgentUsageRepository
 from adapters.repositories.chat_repository import ChatRepository
 from adapters.repositories.tag_repository import TagRepository
 from adapters.repositories.task_repository import TaskRepository
@@ -129,6 +130,7 @@ class _TransactionContext:
         assert self.session is not None
         logger.debug("Initializing repositories")
         self.audit = AuditRepository(self.session)
+        self.agent_usage = AgentUsageRepository(self.session)
         self.chat = ChatRepository(self.session)
         self.tag = TagRepository(self.session)
         self.task = TaskRepository(self.session)

@@ -1,4 +1,5 @@
 import { A, useLocation } from '@solidjs/router'
+import { useQueryClient, type QueryClient } from '@tanstack/solid-query'
 import CalendarDays from 'lucide-solid/icons/calendar-days'
 import ListTodo from 'lucide-solid/icons/list-todo'
 import MessageSquareText from 'lucide-solid/icons/message-square-text'
@@ -20,6 +21,10 @@ import {
 } from 'solid-js'
 
 import { AssistantPanel } from '@/features/assistant-panel/AssistantPanel'
+import {
+  listRecurrenceTemplates,
+  RECURRENCE_TEMPLATES_QUERY_KEY,
+} from '@/entities/recurrence/api'
 import { useI18n } from '@/shared/i18n/I18nProvider'
 import type { TranslationKey } from '@/shared/i18n/types'
 import { BrandMark } from '@/shared/ui/BrandMark'
@@ -28,6 +33,7 @@ interface NavigationItem {
   href: string
   icon: (props: { size: number; strokeWidth: number }) => JSX.Element
   labelKey: TranslationKey
+  preload?: (queryClient: QueryClient) => void
   end?: boolean
 }
 
@@ -38,7 +44,12 @@ const navigationItems: readonly NavigationItem[] = [
     icon: CalendarDays,
     labelKey: 'navigation.calendar',
   },
-  { href: '/recurring', icon: Repeat2, labelKey: 'navigation.recurring' },
+  {
+    href: '/recurring',
+    icon: Repeat2,
+    labelKey: 'navigation.recurring',
+    preload: preloadRecurringWorkspace,
+  },
   { href: '/chat', icon: MessageSquareText, labelKey: 'navigation.chat' },
   { href: '/settings', icon: Settings, labelKey: 'navigation.settings' },
 ]
@@ -46,7 +57,7 @@ const navigationItems: readonly NavigationItem[] = [
 const NAVIGATION_STORAGE_KEY = 'task-manager.navigation-collapsed'
 const ASSISTANT_STORAGE_KEY = 'task-manager.assistant-collapsed'
 
-export function AppShell(props: ParentProps) {
+export function AppShell(props: ParentProps<{ emailVerified: boolean }>) {
   const { t } = useI18n()
   const location = useLocation()
   const [isNavigationCollapsed, setNavigationCollapsed] = createSignal(
@@ -184,6 +195,7 @@ export function AppShell(props: ParentProps) {
           onClick={() => closeMobileAssistant()}
         />
         <AssistantPanel
+          emailVerified={props.emailVerified}
           mobileOpen={isMobileAssistantOpen()}
           onCollapse={() => setAssistantVisibility(true)}
           onMobileClose={() => closeMobileAssistant()}
@@ -236,6 +248,7 @@ function Navigation(props: {
   replace: boolean
 }) {
   const { t } = useI18n()
+  const queryClient = useQueryClient()
   return (
     <nav class={props.class} aria-label={t('navigation.primaryLabel')}>
       <For each={navigationItems}>
@@ -248,6 +261,9 @@ function Navigation(props: {
             replace={props.replace}
             aria-label={t(item.labelKey)}
             title={props.collapsed ? t(item.labelKey) : undefined}
+            onFocus={() => item.preload?.(queryClient)}
+            onMouseEnter={() => item.preload?.(queryClient)}
+            onTouchStart={() => item.preload?.(queryClient)}
           >
             <item.icon size={20} strokeWidth={1.9} />
             <Show when={!props.collapsed}>
@@ -258,4 +274,13 @@ function Navigation(props: {
       </For>
     </nav>
   )
+}
+
+function preloadRecurringWorkspace(queryClient: QueryClient): void {
+  void import('@/pages/recurring/RecurringPage')
+  void queryClient.prefetchQuery({
+    queryKey: RECURRENCE_TEMPLATES_QUERY_KEY,
+    queryFn: listRecurrenceTemplates,
+    staleTime: 30_000,
+  })
 }

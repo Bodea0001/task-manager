@@ -139,6 +139,16 @@ body {
   margin: 0;
 }
 
+.route-loading-state {
+  display: grid;
+  min-height: 420px;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 button,
 input,
 textarea,
@@ -677,6 +687,63 @@ a {
   border-top: 1px solid var(--border);
 }
 
+.account-email-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+}
+
+.account-email-status > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.account-email-status > div > span {
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.account-email-status strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-verification-badge {
+  display: inline-flex;
+  min-height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--warning);
+  background: var(--warning-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.account-verification-badge--verified {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.settings-section .account-verification-note {
+  margin-top: 8px;
+  padding: 0 2px;
+  font-size: 11px;
+}
+
 .account-form {
   display: grid;
   gap: 14px;
@@ -796,6 +863,11 @@ a {
 
   .account-session {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-email-status {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

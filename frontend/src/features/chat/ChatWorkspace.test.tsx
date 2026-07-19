@@ -15,6 +15,25 @@ afterEach(async () => {
 })
 
 describe('chat workspace', () => {
+  it('uses the selected locale for the assistant allowance', async () => {
+    await changeLocale('ru')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).endsWith('/users/me/agent/usage')
+            ? jsonResponse({ used: 0, limit: 10, remaining: 10 })
+            : jsonResponse({ chats: [], next_offset: null }),
+        ),
+      ),
+    )
+    renderChatWorkspace()
+
+    expect(
+      await screen.findByText('Доступно 10 из 10 запросов к ассистенту'),
+    ).toBeVisible()
+  })
+
   it('uses a dismissible conversation drawer on compact screens', async () => {
     vi.stubGlobal('matchMedia', createMatchMedia(true))
     const firstChat = createChat()
@@ -336,6 +355,15 @@ describe('chat workspace', () => {
       if (isChatListRequest(input)) {
         return Promise.resolve(jsonResponse({ chats: [chat], next_offset: null }))
       }
+      if (url.endsWith('/users/me/agent/usage')) {
+        return Promise.resolve(
+          jsonResponse(
+            agentCompleted
+              ? { used: 7, limit: 7, remaining: 0 }
+              : { used: 6, limit: 7, remaining: 1 },
+          ),
+        )
+      }
       if (url.includes(`/chats/${chat.chat_id}/messages`)) {
         return Promise.resolve(
           jsonResponse({
@@ -358,13 +386,19 @@ describe('chat workspace', () => {
     renderChatWorkspace()
 
     const composer = await findReadyComposer()
+    expect(
+      await screen.findByText('1 of 7 assistant request available'),
+    ).toBeVisible()
     await fireEvent.input(composer, { target: { value: 'What is due today?' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     expect(await screen.findByText('Check today’s tasks')).toBeVisible()
     expect(screen.getByText('In progress')).toBeVisible()
     expect(await screen.findByText('One task is due today.')).toBeVisible()
-    await waitFor(() => expect(composer).toBeEnabled())
+    expect(
+      await screen.findByText('The assistant request limit has been reached.'),
+    ).toBeVisible()
+    expect(composer).toBeDisabled()
     const agentCall = fetchMock.mock.calls.find(
       ([input, init]) =>
         String(input).endsWith(`/chats/${chat.chat_id}/agent`) &&
@@ -373,6 +407,37 @@ describe('chat workspace', () => {
     expect(JSON.parse(String(agentCall?.[1]?.body))).toEqual({
       message: 'What is due today?',
     })
+  })
+
+  it('explains an unverified account limit without sending a request', async () => {
+    const chat = createChat()
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (isChatListRequest(input)) {
+        return Promise.resolve(jsonResponse({ chats: [chat], next_offset: null }))
+      }
+      if (url.endsWith('/users/me/agent/usage')) {
+        return Promise.resolve(
+          jsonResponse({ used: 4, limit: 4, remaining: 0 }),
+        )
+      }
+      return Promise.resolve(jsonResponse({ messages: [], next_offset: null }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderChatWorkspace(false)
+
+    const composer = await screen.findByRole('textbox', {
+      name: /Ask about tasks/,
+    })
+    expect(
+      await screen.findByText(
+        'The assistant request limit has been reached. Verify your email to increase it.',
+      ),
+    ).toBeVisible()
+    expect(composer).toBeDisabled()
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).endsWith('/agent')),
+    ).toBe(false)
   })
 
   it('keeps the draft when the assistant request is not accepted', async () => {
@@ -487,8 +552,11 @@ describe('chat workspace', () => {
             <button type="button" onClick={() => setShowPage(true)}>
               Open full chat
             </button>
-            <Show when={showPage()} fallback={<ChatWorkspace mode="panel" />}>
-              <ChatWorkspace mode="page" />
+            <Show
+              when={showPage()}
+              fallback={<ChatWorkspace emailVerified mode="panel" />}
+            >
+              <ChatWorkspace emailVerified mode="page" />
             </Show>
           </QueryClientProvider>
         </I18nProvider>
@@ -530,13 +598,13 @@ describe('chat workspace', () => {
   })
 })
 
-function renderChatWorkspace() {
+function renderChatWorkspace(emailVerified = true) {
   const queryClient = createTestQueryClient()
   return render(() => (
     <ChatDraftProvider userId="user-id">
       <I18nProvider>
         <QueryClientProvider client={queryClient}>
-          <ChatWorkspace mode="page" />
+          <ChatWorkspace emailVerified={emailVerified} mode="page" />
         </QueryClientProvider>
       </I18nProvider>
     </ChatDraftProvider>

@@ -49,6 +49,7 @@ export interface AgentResult {
 
 export interface AgentStreamError {
   code: string
+  context?: Record<string, unknown>
   message: string
   request_id: string
 }

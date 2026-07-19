@@ -4,4 +4,11 @@ export interface User {
   last_name: string
   middle_name: string | null
   email: string
+  email_verified: boolean
+}
+
+export interface AgentRunAllowance {
+  used: number
+  limit: number
+  remaining: number
 }

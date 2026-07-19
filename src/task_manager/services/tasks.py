@@ -301,6 +301,7 @@ class TaskService:
         self, user_id: UUID, data: AddTaskRecurrenceTemplate
     ) -> TaskRecurrenceTemplate:
         async with self.uow() as uow:
+            await uow.user.require_email_verified(user_id)
             template = await uow.task.add_task_recurrence_template(user_id, data)
             await self._record_task_events(
                 uow,
@@ -342,6 +343,7 @@ class TaskService:
         self, user_id: UUID, template_id: UUID, data: AddTaskRecurrence
     ) -> TaskRecurrence:
         async with self.uow() as uow:
+            await uow.user.require_email_verified(user_id)
             recurrence = await uow.task.add_task_recurrence_rule(user_id, template_id, data)
             await self._record_task_event(
                 uow,
@@ -360,6 +362,7 @@ class TaskService:
         self, user_id: UUID, recurrence_id: UUID, data: UpdateTaskRecurrence
     ) -> TaskRecurrence:
         async with self.uow() as uow:
+            await uow.user.require_email_verified(user_id)
             recurrence = await uow.task.update_task_recurrence(user_id, recurrence_id, data)
             await self._record_task_event(
                 uow,
@@ -392,6 +395,7 @@ class TaskService:
         self, user_id: UUID, recurrence_id: UUID, from_datetime: datetime
     ) -> None:
         async with self.uow() as uow:
+            await uow.user.require_email_verified(user_id)
             template_id = await uow.task.get_recurrence_template_id(user_id, recurrence_id)
             await uow.task.recalculate_future_recurrence_instances(
                 user_id=user_id,

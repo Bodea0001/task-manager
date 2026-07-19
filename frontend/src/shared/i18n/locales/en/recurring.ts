@@ -1,6 +1,12 @@
 export const recurring = {
   title: 'Recurring tasks',
   description: 'Templates that create tasks from calendar-based repeat rules.',
+  access: {
+    title: 'Email verification required for new recurrence',
+    message:
+      'Existing recurring tasks remain available. Verify your email before creating a recurring task or adding or changing its repeat rules.',
+    actionHint: 'Verify your email before using this action.',
+  },
   search: {
     label: 'Search recurring tasks',
     placeholder: 'Search by title, description, or tag',

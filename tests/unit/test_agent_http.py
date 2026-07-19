@@ -7,13 +7,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import exceptions as app_exc
-from agents.app import AgentApplication
+from agents.app import AgentApplication, ModelResponseCallback
 from agents.progress import AgentPlanProgressCallback, AgentPlanProgressEvent, PlanStepProgress
 from agents.run_locks import AgentRunLease, AgentRunLockManager
 from agents.schemas.planning import PlanStatus, PlanStepStatus
 from agents.schemas.result import AgentResult, AgentStatus
 from dto.chats import AddChatMessage
 from services.chats import ChatService
+from services.agent_usage import AgentUsageService
 from services.tags import TagService
 from services.tasks import TaskService
 from domain.value_objects.users import User
@@ -60,6 +61,7 @@ class AgentWorkflow:
         result: AgentResult | None = None,
         delay_seconds: float = 0,
         error: Exception | None = None,
+        model_responded: bool = True,
     ) -> None:
         self.result = result or AgentResult(
             status=AgentStatus.COMPLETED,
@@ -68,6 +70,7 @@ class AgentWorkflow:
         )
         self.delay_seconds = delay_seconds
         self.error = error
+        self.model_responded = model_responded
 
     async def run(
         self,
@@ -77,6 +80,7 @@ class AgentWorkflow:
         task_service: TaskService,
         tag_service: TagService,
         plan_progress_callback: AgentPlanProgressCallback | None = None,
+        model_response_callback: ModelResponseCallback | None = None,
     ) -> AgentResult:
         if plan_progress_callback is not None:
             await plan_progress_callback(
@@ -94,6 +98,8 @@ class AgentWorkflow:
             )
         if self.delay_seconds:
             await asyncio.sleep(self.delay_seconds)
+        if self.model_responded and model_response_callback is not None:
+            model_response_callback()
         if self.error is not None:
             raise self.error
         return self.result
@@ -113,6 +119,7 @@ class BlockingAgentWorkflow(AgentWorkflow):
         task_service: TaskService,
         tag_service: TagService,
         plan_progress_callback: AgentPlanProgressCallback | None = None,
+        model_response_callback: ModelResponseCallback | None = None,
     ) -> AgentResult:
         self.started.set()
         await self.release.wait()
@@ -123,7 +130,32 @@ class BlockingAgentWorkflow(AgentWorkflow):
             task_service,
             tag_service,
             plan_progress_callback,
+            model_response_callback,
         )
+
+
+class AgentUsageWorkflow:
+    def __init__(self) -> None:
+        self.reserved: set[UUID] = set()
+        self.consumed: set[UUID] = set()
+        self.released: set[UUID] = set()
+
+    async def reserve(self, run_id: UUID, user_id: UUID) -> None:
+        self.reserved.add(run_id)
+
+    async def consume(self, run_id: UUID, user_id: UUID) -> None:
+        self.consumed.add(run_id)
+
+    async def release(self, run_id: UUID, user_id: UUID) -> None:
+        self.released.add(run_id)
+
+
+class ExhaustedAgentUsageWorkflow(AgentUsageWorkflow):
+    used = 2
+    limit = 2
+
+    async def reserve(self, run_id: UUID, user_id: UUID) -> None:
+        raise app_exc.AgentQuotaExhausted(used=self.used, limit=self.limit)
 
 
 class InMemoryAgentRunLease:
@@ -159,6 +191,7 @@ def _authenticated_user() -> User:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
 
 
@@ -168,12 +201,14 @@ def _create_coordinator(
     *,
     heartbeat_seconds: float = 15,
     run_lock_manager: AgentRunLockManager | None = None,
+    usage: AgentUsageWorkflow | None = None,
 ) -> AgentStreamCoordinator:
     return AgentStreamCoordinator(
         agent=cast(AgentApplication, agent),
         task_service=cast(TaskService, object()),
         tag_service=cast(TagService, object()),
         chat_service=cast(ChatService, chat_history),
+        agent_usage_service=cast(AgentUsageService, usage or AgentUsageWorkflow()),
         run_lock_manager=run_lock_manager or InMemoryAgentRunLockManager(),
         heartbeat_seconds=heartbeat_seconds,
     )
@@ -202,10 +237,12 @@ async def test_agent_endpoint_streams_public_progress_and_persists_conversation(
     user = _authenticated_user()
     chat_id = uuid4()
     history = ChatHistoryWorkflow(user.user_id, chat_id)
+    usage = AgentUsageWorkflow()
     coordinator = _create_coordinator(
         AgentWorkflow(delay_seconds=0.01),
         history,
         heartbeat_seconds=0.001,
+        usage=usage,
     )
     app = _create_agent_app(user, coordinator)
 
@@ -251,6 +288,71 @@ async def test_agent_endpoint_streams_public_progress_and_persists_conversation(
         ("user", "What is due today?"),
         ("assistant", "You have one task today."),
     ]
+    assert usage.consumed == usage.reserved
+    assert usage.released == set()
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_endpoint_releases_quota_when_model_never_responds() -> None:
+    user = _authenticated_user()
+    chat_id = uuid4()
+    history = ChatHistoryWorkflow(user.user_id, chat_id)
+    usage = AgentUsageWorkflow()
+    coordinator = _create_coordinator(
+        AgentWorkflow(
+            result=AgentResult(
+                status=AgentStatus.REJECTED,
+                message="The model endpoint is unavailable. Try again later.",
+            ),
+            model_responded=False,
+        ),
+        history,
+        usage=usage,
+    )
+    app = _create_agent_app(user, coordinator)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/chats/{chat_id}/agent",
+            json={"message": "Show my tasks."},
+        )
+
+    assert response.status_code == 200
+    assert usage.released == usage.reserved
+    assert usage.consumed == set()
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_endpoint_rejects_exhausted_quota_before_persisting_message() -> None:
+    user = _authenticated_user()
+    chat_id = uuid4()
+    history = ChatHistoryWorkflow(user.user_id, chat_id)
+    usage = ExhaustedAgentUsageWorkflow()
+    coordinator = _create_coordinator(
+        AgentWorkflow(),
+        history,
+        usage=usage,
+    )
+    app = _create_agent_app(user, coordinator)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/chats/{chat_id}/agent",
+            json={"message": "Show my tasks."},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "agent_quota_exhausted"
+    assert response.json()["context"] == {"used": usage.used, "limit": usage.limit}
+    assert history.messages == []
     await coordinator.close()
 
 

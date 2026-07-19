@@ -1,6 +1,7 @@
 import os
 from uuid import UUID
 from typing import Any, Literal
+from collections.abc import Callable
 from datetime import datetime
 from logging import ERROR, INFO, WARNING, getLogger
 from time import perf_counter
@@ -12,6 +13,7 @@ from openai import APIConnectionError
 from langfuse.langchain import CallbackHandler
 from langchain_core.messages import HumanMessage
 from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphRecursionError
 from langchain.agents.middleware.tool_call_limit import ToolCallLimitExceededError
@@ -39,6 +41,15 @@ CONN_MAX_SIZE = 20
 
 logger = getLogger(__name__)
 type AgentRunOutcome = Literal["success", "rejected", "error"]
+type ModelResponseCallback = Callable[[], None]
+
+
+class _ModelResponseCallbackHandler(BaseCallbackHandler):
+    def __init__(self, callback: ModelResponseCallback) -> None:
+        self._callback = callback
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        self._callback()
 
 
 class AgentApplication:
@@ -78,6 +89,7 @@ class AgentApplication:
         task_service: TaskService,
         tag_service: TagService,
         plan_progress_callback: AgentPlanProgressCallback | None = None,
+        model_response_callback: ModelResponseCallback | None = None,
     ) -> AgentResult:
         """Run one user message in a chat-bound agent session."""
         started_at = perf_counter()
@@ -110,6 +122,7 @@ class AgentApplication:
                 task_service=task_service,
                 tag_service=tag_service,
                 plan_progress_callback=plan_progress_callback,
+                model_response_callback=model_response_callback,
             )
             result, reason = self._to_agent_result(graph_result)
             if reason is not None:
@@ -250,6 +263,7 @@ class AgentApplication:
         task_service: TaskService,
         tag_service: TagService,
         plan_progress_callback: AgentPlanProgressCallback | None = None,
+        model_response_callback: ModelResponseCallback | None = None,
     ) -> dict[str, Any]:
         return await self._get_graph().ainvoke(
             {"messages": [HumanMessage(content=_message_with_runtime_context(message))]},
@@ -257,6 +271,7 @@ class AgentApplication:
                 chat_id,
                 user_id=user_id,
                 plan_progress_callback=plan_progress_callback,
+                model_response_callback=model_response_callback,
             ),
             durability=settings.agent.checkpoint_durability,
             context=AgentContext(
@@ -272,12 +287,16 @@ class AgentApplication:
         user_id: UUID | None = None,
         run_name: str = "task-manager-agent",
         plan_progress_callback: AgentPlanProgressCallback | None = None,
+        model_response_callback: ModelResponseCallback | None = None,
     ) -> RunnableConfig:
         return {
             "run_name": run_name,
             "recursion_limit": settings.agent.max_iterations,
             "configurable": {"thread_id": str(chat_id)},
-            "callbacks": _create_agent_callbacks(plan_progress_callback),
+            "callbacks": _create_agent_callbacks(
+                plan_progress_callback,
+                model_response_callback,
+            ),
             "metadata": _create_langfuse_metadata(
                 user_id=user_id,
                 chat_id=chat_id,
@@ -409,10 +428,13 @@ def _create_langfuse_metadata(user_id: UUID | None, chat_id: UUID) -> dict[str, 
 
 def _create_agent_callbacks(
     plan_progress_callback: AgentPlanProgressCallback | None = None,
+    model_response_callback: ModelResponseCallback | None = None,
 ) -> list[BaseCallbackHandler]:
     callbacks: list[BaseCallbackHandler] = []
     if plan_progress_callback is not None:
         callbacks.append(AgentPlanProgressCallbackHandler(plan_progress_callback))
+    if model_response_callback is not None:
+        callbacks.append(_ModelResponseCallbackHandler(model_response_callback))
     if os.getenv("LANGFUSE_PUBLIC_KEY"):
         callbacks.append(CallbackHandler())
     return callbacks

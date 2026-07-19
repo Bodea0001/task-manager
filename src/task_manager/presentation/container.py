@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agents.app import AgentApplication
 from services.auth import AuthService
+from services.agent_usage import AgentUsageService
 from services.chats import ChatService
 from services.tags import TagService
 from services.tasks import TaskService
@@ -20,6 +21,7 @@ class ApplicationContainer:
     engine: AsyncEngine
     uow: SQLAlchemyUnitOfWork
     auth_service: AuthService
+    agent_usage_service: AgentUsageService
     user_service: UserService
     task_service: TaskService
     tag_service: TagService

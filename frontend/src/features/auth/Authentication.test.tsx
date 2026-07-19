@@ -35,6 +35,7 @@ describe('authentication', () => {
           last_name: 'Morgan',
           middle_name: null,
           email: 'alex@example.com',
+          email_verified: true,
         }))
       }
       if (url.endsWith('/tasks')) {
@@ -167,6 +168,7 @@ describe('authentication', () => {
           last_name: 'Morgan',
           middle_name: null,
           email: 'alex@example.com',
+          email_verified: true,
         }))
       }
       return Promise.resolve(jsonResponse({ tasks: [], next_offset: null }))
@@ -216,6 +218,7 @@ describe('authentication', () => {
       last_name: 'Morgan',
       middle_name: 'Jordan',
       email: 'alex@example.com',
+      email_verified: true,
     }
     const fetchMock = vi.fn((...args: Parameters<typeof fetch>) => {
       const [input, init] = args
@@ -257,6 +260,8 @@ describe('authentication', () => {
 
     const firstName = await screen.findByLabelText('First name')
     const middleName = screen.getByLabelText(/Middle name/)
+    expect(screen.queryByRole('textbox', { name: 'Email' })).not.toBeInTheDocument()
+    expect(screen.getByText('Verified')).toBeVisible()
     await fireEvent.input(firstName, { target: { value: '  Alexa  ' } })
     await fireEvent.input(middleName, { target: { value: '   ' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))

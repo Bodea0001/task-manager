@@ -39,6 +39,13 @@ export const chat = {
     send: 'Отправить сообщение',
     running: 'Ассистент выполняет запрос',
     hint: 'Enter — отправить · Shift+Enter — новая строка',
+    allowance_one: 'Доступен {{count}} из {{limit}} запросов к ассистенту',
+    allowance_few: 'Доступно {{count}} из {{limit}} запросов к ассистенту',
+    allowance_many: 'Доступно {{count}} из {{limit}} запросов к ассистенту',
+    allowance_other: 'Доступно {{count}} из {{limit}} запросов к ассистенту',
+    quotaExhausted: 'Лимит запросов к ассистенту исчерпан.',
+    quotaExhaustedUnverified:
+      'Лимит запросов к ассистенту исчерпан. Подтвердите почту, чтобы увеличить его.',
   },
   plan: {
     title: 'План выполнения',
@@ -52,6 +59,9 @@ export const chat = {
     runInProgress: 'В этом диалоге уже обрабатывается другой запрос.',
     coordination: 'Ассистент временно недоступен. Повторите попытку немного позже.',
     execution: 'Ассистент не смог выполнить запрос.',
+    quotaExhausted: 'Лимит запросов к ассистенту исчерпан.',
+    quotaExhaustedUnverified:
+      'Лимит запросов к ассистенту исчерпан. Подтвердите почту, чтобы увеличить его.',
     requestId: 'Идентификатор запроса: {{requestId}}',
   },
 } as const satisfies DictionaryShape<typeof enChat>

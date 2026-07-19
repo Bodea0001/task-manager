@@ -160,6 +160,18 @@ class AgentConfig(BaseModel):
     summarization_keep_messages: int = 10
 
 
+class AgentUsageConfig(BaseModel):
+    unverified_run_limit: int = Field(default=3, ge=1)
+    verified_run_limit: int = Field(default=10, ge=1)
+    reservation_ttl_seconds: int = Field(default=3_600, ge=300)
+
+    @model_validator(mode="after")
+    def validate_limits(self) -> "AgentUsageConfig":
+        if self.verified_run_limit < self.unverified_run_limit:
+            raise ValueError("verified agent run limit must not be lower than unverified limit")
+        return self
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         case_sensitive=False,
@@ -171,6 +183,7 @@ class Settings(BaseSettings):
     db: DatabaseConfig
     auth: AuthConfig
     agent: AgentConfig
+    agent_usage: AgentUsageConfig = AgentUsageConfig()
     recurrence: RecurrenceConfig = RecurrenceConfig()
     key_value_store: KeyValueStoreConfig = KeyValueStoreConfig()
     celery: CeleryConfig = CeleryConfig()

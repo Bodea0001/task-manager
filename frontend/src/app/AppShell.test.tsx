@@ -8,6 +8,7 @@ import {
   within,
 } from '@solidjs/testing-library'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ParentProps } from 'solid-js'
 
 import { AppShell } from '@/app/AppShell'
 import { ChatDraftProvider } from '@/features/chat/ChatDraftProvider'
@@ -67,6 +68,23 @@ describe('application navigation', () => {
     ).toBeVisible()
   })
 
+  it('starts loading recurring tasks before opening the workspace', async () => {
+    renderAppShell()
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockClear()
+
+    await fireEvent.mouseEnter(
+      screen.getAllByRole('link', { name: 'Recurring tasks' })[0],
+    )
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/recurrence-templates',
+        expect.anything(),
+      ),
+    )
+  })
+
   it('allows the user to collapse and restore the assistant panel', async () => {
     const firstRender = renderAppShell()
 
@@ -118,11 +136,15 @@ function renderAppShell() {
     <ChatDraftProvider userId="user-id">
       <I18nProvider>
         <QueryClientProvider client={queryClient}>
-          <Router root={AppShell}>
+          <Router root={TestAppShell}>
             <Route path="/" component={() => <div>Task workspace</div>} />
           </Router>
         </QueryClientProvider>
       </I18nProvider>
     </ChatDraftProvider>
   ))
+}
+
+function TestAppShell(props: ParentProps) {
+  return <AppShell emailVerified>{props.children}</AppShell>
 }

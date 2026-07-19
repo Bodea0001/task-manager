@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from pydantic import JsonValue
 
 import exceptions as app_exc
 from presentation.request_context import (
@@ -58,6 +59,7 @@ _VALIDATION_ERROR_CODES = {
 class _ErrorDefinition:
     status_code: int
     code: str
+    context_fields: tuple[str, ...] = ()
 
 
 _ERROR_DEFINITIONS: dict[type[app_exc.BaseAppException], _ErrorDefinition] = {
@@ -69,6 +71,12 @@ _ERROR_DEFINITIONS: dict[type[app_exc.BaseAppException], _ErrorDefinition] = {
     app_exc.AgentCoordinationUnavailable: _ErrorDefinition(
         503,
         "agent_coordination_unavailable",
+    ),
+    app_exc.EmailVerificationRequired: _ErrorDefinition(403, "email_verification_required"),
+    app_exc.AgentQuotaExhausted: _ErrorDefinition(
+        403,
+        "agent_quota_exhausted",
+        ("used", "limit"),
     ),
     app_exc.ChatNotFound: _ErrorDefinition(404, "chat_not_found"),
     app_exc.TagNotFound: _ErrorDefinition(404, "tag_not_found"),
@@ -103,6 +111,7 @@ async def application_exception_handler(
         code=definition.code,
         message=str(exc),
         headers=headers,
+        context={field: getattr(exc, field) for field in definition.context_fields} or None,
     )
 
 
@@ -178,6 +187,8 @@ def _error_definition(exc: app_exc.BaseAppException) -> _ErrorDefinition:
         return _ErrorDefinition(404, "not_found")
     if isinstance(exc, app_exc.Conflict):
         return _ErrorDefinition(409, "conflict")
+    if isinstance(exc, app_exc.Forbidden):
+        return _ErrorDefinition(403, "forbidden")
     if isinstance(exc, app_exc.Wrongness):
         return _ErrorDefinition(422, "invalid_operation")
     return _ErrorDefinition(400, "application_error")
@@ -192,6 +203,7 @@ def _error_response(
     details: tuple[ErrorDetail, ...] = (),
     headers: dict[str, str] | None = None,
     log_fields: tuple[tuple[str, object], ...] = (),
+    context: dict[str, JsonValue] | None = None,
 ) -> JSONResponse:
     set_request_error(RequestErrorContext(code=code, log_fields=log_fields))
     request_id = getattr(request.state, "request_id", None) or get_request_id() or "unknown"
@@ -202,9 +214,10 @@ def _error_response(
         message=message,
         request_id=request_id,
         details=details,
+        context=context,
     )
     return JSONResponse(
         status_code=status_code,
-        content=body.model_dump(mode="json"),
+        content=body.model_dump(mode="json", exclude_none=True),
         headers=response_headers,
     )

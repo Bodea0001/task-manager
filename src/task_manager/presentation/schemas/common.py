@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class ErrorDetail(BaseModel):
@@ -20,3 +20,4 @@ class ErrorResponse(BaseModel):
     message: str
     request_id: str
     details: tuple[ErrorDetail, ...] = Field(default=())
+    context: dict[str, JsonValue] | None = None

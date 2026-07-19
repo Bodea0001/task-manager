@@ -55,15 +55,11 @@ class UpdateUserData:
     first_name: str | None = None
     last_name: str | None = None
     middle_name: str | None = None
-    email: str | None = None
     clear_middle_name: bool = False
 
     def __post_init__(self) -> None:
         if (
-            all(
-                value is None
-                for value in (self.first_name, self.last_name, self.middle_name, self.email)
-            )
+            all(value is None for value in (self.first_name, self.last_name, self.middle_name))
             and not self.clear_middle_name
         ):
             raise ValueError("at least one user field must be provided")
@@ -71,8 +67,6 @@ class UpdateUserData:
         if self.middle_name is not None and self.clear_middle_name:
             raise ValueError("middle_name cannot be updated and cleared together")
 
-        if self.email is not None:
-            object.__setattr__(self, "email", normalize_email(self.email))
         if self.first_name is not None:
             object.__setattr__(self, "first_name", normalize_name(self.first_name, "first_name"))
         if self.last_name is not None:

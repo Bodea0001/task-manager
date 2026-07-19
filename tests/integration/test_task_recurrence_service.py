@@ -31,6 +31,7 @@ from dto.tasks import (
     UpdateTaskOccurrence,
 )
 from exceptions import (
+    EmailVerificationRequired,
     RecurrenceRuleNotFound,
     RecurrenceTemplateNotFound,
     TagNotFound,
@@ -247,6 +248,28 @@ async def create_recurrence_template(
             ),
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_unverified_user_cannot_expand_recurrence_data(
+    task_service: TaskService,
+    test_engine: AsyncEngine,
+) -> None:
+    async with test_engine.begin() as connection:
+        await connection.execute(
+            text("""
+                UPDATE user_email_verification
+                SET verified_at = NULL
+                WHERE user_id = :user_id
+            """),
+            {"user_id": TEST_USER_ID},
+        )
+
+    with pytest.raises(EmailVerificationRequired):
+        await create_recurrence_template(
+            task_service,
+            title="Unverified recurrence",
+        )
 
 
 async def create_materialization_conflict(

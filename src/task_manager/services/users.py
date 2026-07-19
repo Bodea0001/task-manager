@@ -15,5 +15,8 @@ class UserService:
 
     async def update_user(self, user_id: UUID, data: UpdateUserData) -> User:
         async with self.uow() as uow:
-            await uow.user.get_user(user_id)
             return await uow.user.update_user(user_id, data)
+
+    async def require_email_verified(self, user_id: UUID) -> None:
+        async with self.uow(read_only=True) as uow:
+            await uow.user.require_email_verified(user_id)

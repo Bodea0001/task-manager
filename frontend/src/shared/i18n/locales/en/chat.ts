@@ -36,6 +36,13 @@ export const chat = {
     send: 'Send message',
     running: 'The assistant is working',
     hint: 'Enter to send · Shift+Enter for a new line',
+    allowance_one: '{{count}} of {{limit}} assistant request available',
+    allowance_few: '{{count}} of {{limit}} assistant requests available',
+    allowance_many: '{{count}} of {{limit}} assistant requests available',
+    allowance_other: '{{count}} of {{limit}} assistant requests available',
+    quotaExhausted: 'The assistant request limit has been reached.',
+    quotaExhaustedUnverified:
+      'The assistant request limit has been reached. Verify your email to increase it.',
   },
   plan: {
     title: 'Execution plan',
@@ -49,6 +56,9 @@ export const chat = {
     runInProgress: 'This conversation is already processing another request.',
     coordination: 'The assistant is temporarily unavailable. Try again shortly.',
     execution: 'The assistant could not complete the request.',
+    quotaExhausted: 'The assistant request limit has been reached.',
+    quotaExhaustedUnverified:
+      'The assistant request limit has been reached. Verify your email to increase it.',
     requestId: 'Request ID: {{requestId}}',
   },
 } as const

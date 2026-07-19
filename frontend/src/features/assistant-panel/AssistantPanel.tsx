@@ -9,6 +9,7 @@ import { useI18n } from '@/shared/i18n/I18nProvider'
 import { trapFocus } from '@/shared/ui/keyboard'
 
 export function AssistantPanel(props: {
+  emailVerified: boolean
   mobileOpen: boolean
   onCollapse: () => void
   onMobileClose: () => void
@@ -69,7 +70,10 @@ export function AssistantPanel(props: {
         </div>
       </header>
 
-      <ChatWorkspace mode="panel" />
+      <ChatWorkspace
+        mode="panel"
+        emailVerified={props.emailVerified}
+      />
     </aside>
   )
 }

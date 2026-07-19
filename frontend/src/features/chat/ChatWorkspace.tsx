@@ -48,6 +48,11 @@ import type {
   ChatMessageListResponse,
   PlanStepStatus,
 } from '@/entities/chat/model'
+import {
+  AGENT_RUN_ALLOWANCE_QUERY_KEY,
+  getAgentRunAllowance,
+} from '@/entities/user/api'
+import type { AgentRunAllowance } from '@/entities/user/model'
 import { RECURRENCE_TEMPLATES_QUERY_KEY } from '@/entities/recurrence/api'
 import { TAGS_QUERY_KEY } from '@/entities/tag/api'
 import { invalidateTaskLists } from '@/entities/task/cache'
@@ -77,7 +82,10 @@ const planStatusKeys: Record<PlanStepStatus, TranslationKey> = {
   failed: 'chat.plan.failed',
 }
 
-export function ChatWorkspace(props: { mode: WorkspaceMode }) {
+export function ChatWorkspace(props: {
+  emailVerified: boolean
+  mode: WorkspaceMode
+}) {
   const queryClient = useQueryClient()
   const drafts = useChatDrafts()
   const { formatDateTime, t } = useI18n()
@@ -135,6 +143,12 @@ export function ChatWorkspace(props: { mode: WorkspaceMode }) {
     queryKey: CHATS_QUERY_KEY,
     queryFn: () => listChats(CHAT_LIST_PAGE_SIZE),
   }))
+  const allowanceQuery = createQuery(() => ({
+    queryKey: AGENT_RUN_ALLOWANCE_QUERY_KEY,
+    queryFn: getAgentRunAllowance,
+  }))
+  const allowance = () => allowanceQuery.data
+  const isQuotaExhausted = () => allowance()?.remaining === 0
   const chats = createMemo(() => chatsQuery.data?.chats || [])
   const selectedChat = createMemo(() =>
     chats().find((chat) => chat.chat_id === selectedChatId()),
@@ -385,9 +399,9 @@ export function ChatWorkspace(props: { mode: WorkspaceMode }) {
   }
 
   const submit = async () => {
-    if (chatsQuery.isPending) return
+    if (chatsQuery.isPending || allowanceQuery.isPending) return
     const content = input().trim()
-    if (content.length === 0 || isRunning()) return
+    if (content.length === 0 || isRunning() || isQuotaExhausted()) return
     const draftChatId = selectedChatId()
     let chatId = draftChatId
     if (chatId === undefined) {
@@ -423,6 +437,7 @@ export function ChatWorkspace(props: { mode: WorkspaceMode }) {
         },
         onError: (error) => {
           clearSubmittedDraft()
+          storeExhaustedAllowance(queryClient, error)
           setStreamError(error)
           scrollToBottom()
         },
@@ -436,9 +451,11 @@ export function ChatWorkspace(props: { mode: WorkspaceMode }) {
         ])
       }
     } catch (error) {
+      storeExhaustedAllowance(queryClient, error)
       setStreamError(streamErrorFromException(error))
       await messagesQuery.refetch()
     } finally {
+      await allowanceQuery.refetch()
       setPreview()
       setPlan()
       setRunning(false)
@@ -721,7 +738,12 @@ export function ChatWorkspace(props: { mode: WorkspaceMode }) {
                 {(currentPlan) => <PlanProgress plan={currentPlan} />}
               </Show>
               <Show keyed when={streamError()}>
-                {(error) => <StreamError error={error} />}
+                {(error) => (
+                  <StreamError
+                    emailVerified={props.emailVerified}
+                    error={error}
+                  />
+                )}
               </Show>
               <Show when={isRunning() && plan() === undefined}>
                 <div class="chat-working" aria-live="polite">
@@ -745,7 +767,12 @@ export function ChatWorkspace(props: { mode: WorkspaceMode }) {
             rows={props.mode === 'panel' ? 2 : 3}
             maxLength={MAX_MESSAGE_LENGTH}
             value={input()}
-            disabled={chatsQuery.isPending || isRunning()}
+            disabled={
+              chatsQuery.isPending ||
+              allowanceQuery.isPending ||
+              isRunning() ||
+              isQuotaExhausted()
+            }
             aria-label={t('chat.composer.placeholder')}
             placeholder={t('chat.composer.placeholder')}
             onInput={(event) =>
@@ -759,14 +786,43 @@ export function ChatWorkspace(props: { mode: WorkspaceMode }) {
             }}
           />
           <div>
-            <span>{t('chat.composer.hint')}</span>
+            <div class="chat-composer-notes">
+              <span class="chat-composer-keyboard-hint">
+                {t('chat.composer.hint')}
+              </span>
+              <Show keyed when={allowance()}>
+                {(currentAllowance) => (
+                  <span
+                    class="chat-composer-allowance"
+                    classList={{
+                      'chat-composer-allowance--exhausted':
+                        currentAllowance.remaining === 0,
+                    }}
+                  >
+                    {t(
+                      currentAllowance.remaining === 0
+                        ? props.emailVerified
+                          ? 'chat.composer.quotaExhausted'
+                          : 'chat.composer.quotaExhaustedUnverified'
+                        : 'chat.composer.allowance',
+                      {
+                        count: currentAllowance.remaining,
+                        limit: currentAllowance.limit,
+                      },
+                    )}
+                  </span>
+                )}
+              </Show>
+            </div>
             <button
               type="submit"
               disabled={
                 chatsQuery.isPending ||
+                allowanceQuery.isPending ||
                 input().trim().length === 0 ||
                 isRunning() ||
-                operationPending()
+                operationPending() ||
+                isQuotaExhausted()
               }
               aria-label={t('chat.composer.send')}
               title={t('chat.composer.send')}
@@ -1006,13 +1062,18 @@ function PlanStepIcon(props: { step: AgentPlanStep }) {
   )
 }
 
-function StreamError(props: { error: AgentStreamError }) {
+function StreamError(props: {
+  emailVerified: boolean
+  error: AgentStreamError
+}) {
   const { t } = useI18n()
   return (
     <div class="chat-stream-error" role="alert">
       <AlertCircle size={17} strokeWidth={1.9} />
       <div>
-        <strong>{streamErrorMessage(props.error.code, t)}</strong>
+        <strong>
+          {streamErrorMessage(props.error.code, props.emailVerified, t)}
+        </strong>
         <Show when={props.error.request_id.length > 0}>
           <small>
             {t('chat.errors.requestId', { requestId: props.error.request_id })}
@@ -1027,6 +1088,7 @@ function streamErrorFromException(error: unknown): AgentStreamError {
   if (error instanceof ApiError) {
     return {
       code: error.code,
+      context: error.context,
       message: error.message,
       request_id: error.requestId || '',
     }
@@ -1036,8 +1098,16 @@ function streamErrorFromException(error: unknown): AgentStreamError {
 
 function streamErrorMessage(
   code: string,
+  emailVerified: boolean,
   t: (key: TranslationKey, options?: Record<string, unknown>) => string,
 ): string {
+  if (code === 'agent_quota_exhausted') {
+    return t(
+      emailVerified
+        ? 'chat.errors.quotaExhausted'
+        : 'chat.errors.quotaExhaustedUnverified',
+    )
+  }
   if (code === 'agent_run_in_progress') return t('chat.errors.runInProgress')
   if (
     code === 'agent_coordination_unavailable' ||
@@ -1047,6 +1117,30 @@ function streamErrorMessage(
   }
   if (code === 'agent_execution_failed') return t('chat.errors.execution')
   return t('chat.errors.stream')
+}
+
+function storeExhaustedAllowance(
+  queryClient: QueryClient,
+  error: AgentStreamError | unknown,
+): void {
+  if (
+    typeof error !== 'object' ||
+    error === null ||
+    !('code' in error) ||
+    error.code !== 'agent_quota_exhausted' ||
+    !('context' in error) ||
+    typeof error.context !== 'object' ||
+    error.context === null
+  ) {
+    return
+  }
+  const context = error.context as Record<string, unknown>
+  if (typeof context.used !== 'number' || typeof context.limit !== 'number') return
+  queryClient.setQueryData<AgentRunAllowance>(AGENT_RUN_ALLOWANCE_QUERY_KEY, {
+    used: context.used,
+    limit: context.limit,
+    remaining: 0,
+  })
 }
 
 function updateCachedChat(queryClient: QueryClient, chat: Chat): void {

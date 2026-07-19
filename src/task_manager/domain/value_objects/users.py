@@ -9,6 +9,7 @@ class User:
     first_name: str
     last_name: str
     email: str
+    email_verified: bool
     middle_name: str | None = None
 
 

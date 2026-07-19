@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 import exceptions as app_exc
 from services.auth import AuthService
+from services.agent_usage import AgentUsageService
 from services.tags import TagService
 from services.tasks import TaskService
 from services.users import UserService
@@ -17,9 +18,11 @@ from dto.users import UpdateUserData
 from domain.value_objects.tags import Tag
 from domain.value_objects.tasks import Task, TaskStatus
 from domain.value_objects.users import AuthTokens, User
+from domain.value_objects.agent_usage import AgentRunAllowance
 from presentation.app import create_app
 from presentation.dependencies import (
     get_auth_service,
+    get_agent_usage_service,
     get_current_user,
     get_tag_service,
     get_task_service,
@@ -64,9 +67,17 @@ class UpdatingUserService:
             user_id=user_id,
             first_name=data.first_name or "First",
             last_name=data.last_name or "Last",
-            email=data.email or "user@example.com",
+            email="user@example.com",
+            email_verified=True,
             middle_name=data.middle_name,
         )
+
+
+class AgentUsageWorkflow:
+    allowance = AgentRunAllowance(user_id=UUID(int=0), used=2, limit=8, remaining=6)
+
+    async def get_allowance(self, user_id: UUID) -> AgentRunAllowance:
+        return replace(self.allowance, user_id=user_id)
 
 
 class TaskWorkflowService:
@@ -276,6 +287,7 @@ async def test_current_user_endpoint_returns_authenticated_user() -> None:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
 
     async def authenticated_user() -> User:
@@ -297,6 +309,7 @@ async def test_current_user_endpoint_returns_authenticated_user() -> None:
         "last_name": "Last",
         "email": "user@example.com",
         "middle_name": None,
+        "email_verified": True,
     }
 
 
@@ -317,6 +330,41 @@ async def test_current_user_endpoint_requires_bearer_token() -> None:
 
 
 @pytest.mark.asyncio
+async def test_current_user_can_inspect_agent_allowance() -> None:
+    user = User(
+        user_id=uuid4(),
+        first_name="First",
+        last_name="Last",
+        email="user@example.com",
+        email_verified=True,
+    )
+
+    async def authenticated_user() -> User:
+        return user
+
+    usage = AgentUsageWorkflow()
+    app = create_app()
+    app.dependency_overrides[get_current_user] = authenticated_user
+    app.dependency_overrides[get_agent_usage_service] = lambda: cast(
+        AgentUsageService,
+        usage,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/api/v1/users/me/agent/usage")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "used": usage.allowance.used,
+        "limit": usage.allowance.limit,
+        "remaining": usage.allowance.remaining,
+    }
+
+
+@pytest.mark.asyncio
 async def test_authenticated_request_log_contains_verified_user_id(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -325,6 +373,7 @@ async def test_authenticated_request_log_contains_verified_user_id(
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
     app = create_app()
     app.dependency_overrides[get_auth_service] = lambda: cast(
@@ -391,6 +440,7 @@ async def test_authenticated_user_can_update_profile() -> None:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
 
     async def authenticated_user() -> User:
@@ -406,7 +456,7 @@ async def test_authenticated_user_can_update_profile() -> None:
     ) as client:
         response = await client.patch(
             "/api/v1/users/me",
-            json={"first_name": "Updated", "email": "updated@example.com"},
+            json={"first_name": "Updated"},
         )
 
     assert response.status_code == 200
@@ -414,9 +464,40 @@ async def test_authenticated_user_can_update_profile() -> None:
         "user_id": str(user.user_id),
         "first_name": "Updated",
         "last_name": "Last",
-        "email": "updated@example.com",
+        "email": "user@example.com",
         "middle_name": None,
+        "email_verified": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_profile_update_rejects_email_changes() -> None:
+    user = User(
+        user_id=uuid4(),
+        first_name="First",
+        last_name="Last",
+        email="user@example.com",
+        email_verified=True,
+    )
+
+    async def authenticated_user() -> User:
+        return user
+
+    app = create_app()
+    app.dependency_overrides[get_current_user] = authenticated_user
+    app.dependency_overrides[get_user_service] = lambda: cast(UserService, UpdatingUserService())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.patch(
+            "/api/v1/users/me",
+            json={"email": "updated@example.com"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["details"][0]["code"] == "unexpected_field"
 
 
 @pytest.mark.asyncio
@@ -426,6 +507,7 @@ async def test_authenticated_user_can_clear_optional_profile_field() -> None:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
         middle_name="Middle",
     )
 
@@ -456,6 +538,7 @@ async def test_user_can_manage_a_task_through_http() -> None:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
     task_service = TaskWorkflowService()
 
@@ -515,6 +598,7 @@ async def test_task_datetime_with_timezone_is_rejected() -> None:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
 
     async def authenticated_user() -> User:
@@ -551,6 +635,7 @@ async def test_user_can_manage_tags_through_http() -> None:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
     tag_service = TagWorkflowService()
 
@@ -592,6 +677,7 @@ async def test_duplicate_tag_returns_conflict() -> None:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
 
     async def authenticated_user() -> User:

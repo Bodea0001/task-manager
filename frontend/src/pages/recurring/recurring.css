@@ -3,6 +3,34 @@
   margin: 0 auto;
 }
 
+.recurring-access-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 16px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
+  border-radius: 7px;
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.recurring-access-notice > div {
+  display: grid;
+  gap: 3px;
+}
+
+.recurring-access-notice strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.recurring-access-notice span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .recurring-header {
   display: flex;
   align-items: flex-end;
@@ -41,6 +69,14 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 680;
+}
+
+.recurring-header > button:disabled,
+.recurring-section-heading button:disabled,
+.recurring-state button:disabled,
+.recurring-rule-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .recurring-toolbar {
@@ -303,7 +339,7 @@
   font-weight: 650;
 }
 
-.recurring-section-heading button:hover {
+.recurring-section-heading button:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-soft);
@@ -426,6 +462,20 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 650;
+}
+
+.recurring-lazy-state {
+  display: grid;
+  min-height: 120px;
+  align-content: center;
+  justify-items: center;
+  gap: 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.recurring-lazy-state--spacious {
+  min-height: 420px;
 }
 
 .recurrence-deletion-block {

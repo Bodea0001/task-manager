@@ -596,9 +596,26 @@
   padding-top: 7px;
 }
 
-.chat-composer > div > span {
+.chat-composer-notes {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-composer-notes > span {
   color: var(--text-soft);
   font-size: 9px;
+  line-height: 1.35;
+}
+
+.chat-composer-notes .chat-composer-allowance {
+  color: var(--text-muted);
+  font-weight: 620;
+}
+
+.chat-composer-notes .chat-composer-allowance--exhausted {
+  color: var(--danger);
 }
 
 .chat-composer button[type='submit'] {
@@ -743,14 +760,18 @@
     font-size: 12px;
   }
 
-  .chat-composer > div > span {
+  .chat-composer-keyboard-hint {
     display: none;
   }
 
   .chat-composer > div {
     min-height: 32px;
-    justify-content: flex-end;
+    align-items: center;
     padding-top: 5px;
+  }
+
+  .chat-composer-notes {
+    flex: 1;
   }
 
   .chat-composer button[type='submit'] {

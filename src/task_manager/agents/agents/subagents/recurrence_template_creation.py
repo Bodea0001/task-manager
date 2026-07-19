@@ -16,7 +16,10 @@ from agents.tools.tasks import create_task_recurrence_template
 from agents.schemas.state import AgentState
 from agents.schemas.result import AgentResult
 from agents.schemas.context import AgentContext
-from agents.middlewares import RepeatedToolCallGuardMiddleware
+from agents.middlewares import (
+    ApplicationErrorMiddleware,
+    RepeatedToolCallGuardMiddleware,
+)
 
 _TOOLS = (
     get_current_datetime,
@@ -31,6 +34,7 @@ _NON_MUTATING_TOOL_NAMES = {
 }
 
 _MIDDLEWARES: Sequence[AgentMiddleware[Any, AgentContext, Any]] = (
+    ApplicationErrorMiddleware(),
     ToolCallLimitMiddleware[AgentResult, AgentContext](
         run_limit=settings.agent.max_tool_calls,
         exit_behavior="error",

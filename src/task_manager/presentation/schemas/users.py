@@ -5,7 +5,6 @@ from typing import Self
 from pydantic import (
     BaseModel,
     ConfigDict,
-    EmailStr,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -14,6 +13,7 @@ from pydantic import (
 from dto.users import UpdateUserData
 from domain.users import normalize_name, normalize_optional_name
 from domain.value_objects.users import User
+from domain.value_objects.agent_usage import AgentRunAllowance
 
 
 class UpdateUserRequest(BaseModel):
@@ -22,7 +22,6 @@ class UpdateUserRequest(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     middle_name: str | None = None
-    email: EmailStr | None = None
 
     @field_validator("first_name", "last_name")
     @classmethod
@@ -49,7 +48,7 @@ class UpdateUserRequest(BaseModel):
         if not self.model_fields_set:
             raise ValueError("at least one user field must be provided")
 
-        for field_name in ("first_name", "last_name", "email"):
+        for field_name in ("first_name", "last_name"):
             if field_name in self.model_fields_set and getattr(self, field_name) is None:
                 raise ValueError(f"{field_name} cannot be null")
         return self
@@ -59,7 +58,6 @@ class UpdateUserRequest(BaseModel):
             first_name=self.first_name,
             last_name=self.last_name,
             middle_name=self.middle_name,
-            email=str(self.email) if self.email is not None else None,
             clear_middle_name=("middle_name" in self.model_fields_set and self.middle_name is None),
         )
 
@@ -72,6 +70,7 @@ class UserResponse(BaseModel):
     last_name: str
     email: str
     middle_name: str | None
+    email_verified: bool
 
     @classmethod
     def from_domain(cls, user: User) -> "UserResponse":
@@ -81,4 +80,21 @@ class UserResponse(BaseModel):
             last_name=user.last_name,
             email=user.email,
             middle_name=user.middle_name,
+            email_verified=user.email_verified,
+        )
+
+
+class AgentRunAllowanceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    used: int
+    limit: int
+    remaining: int
+
+    @classmethod
+    def from_domain(cls, allowance: AgentRunAllowance) -> "AgentRunAllowanceResponse":
+        return cls(
+            used=allowance.used,
+            limit=allowance.limit,
+            remaining=allowance.remaining,
         )

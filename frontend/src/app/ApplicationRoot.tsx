@@ -96,7 +96,9 @@ export function ApplicationRoot(props: ParentProps) {
         <Match when={isAuthPage()}>{props.children}</Match>
         <Match when={auth.status() === 'authenticated'}>
           <ChatDraftProvider userId={auth.user()!.user_id}>
-            <AppShell>{props.children}</AppShell>
+            <AppShell emailVerified={auth.user()!.email_verified}>
+              {props.children}
+            </AppShell>
           </ChatDraftProvider>
         </Match>
       </Switch>

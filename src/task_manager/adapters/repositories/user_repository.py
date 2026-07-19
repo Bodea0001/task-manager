@@ -6,12 +6,16 @@ from collections.abc import Awaitable, Callable
 from functools import wraps
 
 import asyncpg
-from sqlalchemy import select, insert, update
+from sqlalchemy import case, insert, literal, select, update
 from sqlalchemy.exc import IntegrityError, NoResultFound
 
 import exceptions as app_exc
 from dto.users import RegisterUser, UpdateUserData
-from models.users import User as UserModel, UserAuth as UserAuthModel
+from models.users import (
+    User as UserModel,
+    UserAuth as UserAuthModel,
+    UserEmailVerification as UserEmailVerificationModel,
+)
 from models.users import UserRefreshToken as UserRefreshTokenModel
 from domain.value_objects.users import User, RefreshTokenSession
 from adapters.repository import SQLAlchemyRepository
@@ -42,7 +46,7 @@ def translate_repository_errors(
 class UserRepository(SQLAlchemyRepository):
     @translate_repository_errors
     async def add_user(self, data: RegisterUser) -> User:
-        stmt = (
+        new_user = (
             insert(UserModel)
             .values(
                 email=data.email,
@@ -50,32 +54,88 @@ class UserRepository(SQLAlchemyRepository):
                 middle_name=data.middle_name,
                 last_name=data.last_name,
             )
-            .returning(UserModel)
+            .returning(
+                UserModel.user_id,
+                UserModel.first_name,
+                UserModel.middle_name,
+                UserModel.last_name,
+                UserModel.email,
+            )
+            .cte("new_user")
         )
+        new_auth = (
+            insert(UserAuthModel)
+            .from_select(
+                [UserAuthModel.user_id, UserAuthModel.hashed_password],
+                select(new_user.c.user_id, literal(data.hashed_password)),
+            )
+            .cte("new_auth")
+        )
+        new_verification = (
+            insert(UserEmailVerificationModel)
+            .from_select(
+                [UserEmailVerificationModel.user_id],
+                select(new_user.c.user_id),
+            )
+            .cte("new_verification")
+        )
+        stmt = select(new_user).add_cte(new_auth).add_cte(new_verification)
 
         result = await self.session.execute(stmt)
-        user_model = result.scalar_one()
-        await self.session.execute(
-            insert(UserAuthModel).values(
-                user_id=user_model.user_id,
-                hashed_password=data.hashed_password,
-            )
+        row = result.one()
+        return self._values_to_user(
+            user_id=row.user_id,
+            first_name=row.first_name,
+            middle_name=row.middle_name,
+            last_name=row.last_name,
+            email=row.email,
+            email_verified=False,
         )
-        return self._model_to_user(user_model)
 
     @translate_repository_errors
     async def get_user(self, user_id: UUID) -> User:
-        stmt = select(UserModel).where(UserModel.user_id == user_id)
+        stmt = (
+            select(UserModel, UserEmailVerificationModel.verified_at)
+            .join(
+                UserEmailVerificationModel,
+                UserEmailVerificationModel.user_id == UserModel.user_id,
+            )
+            .where(UserModel.user_id == user_id)
+        )
 
         result = await self.session.execute(stmt)
-        return self._model_to_user(result.scalar_one())
+        model, verified_at = result.one()
+        return self._model_to_user(model, email_verified=verified_at is not None)
 
     @translate_repository_errors
     async def get_user_by_email(self, email: str) -> User:
-        stmt = select(UserModel).where(UserModel.email == email)
+        stmt = (
+            select(UserModel, UserEmailVerificationModel.verified_at)
+            .join(
+                UserEmailVerificationModel,
+                UserEmailVerificationModel.user_id == UserModel.user_id,
+            )
+            .where(UserModel.email == email)
+        )
 
         result = await self.session.execute(stmt)
-        return self._model_to_user(result.scalar_one())
+        model, verified_at = result.one()
+        return self._model_to_user(model, email_verified=verified_at is not None)
+
+    @translate_repository_errors
+    async def require_email_verified(self, user_id: UUID) -> None:
+        stmt = select(
+            case(
+                (UserEmailVerificationModel.verified_at.is_not(None), True),
+                else_=False,
+            )
+        ).where(UserEmailVerificationModel.user_id == user_id)
+        result = await self.session.execute(stmt)
+        email_verified = result.scalar_one_or_none()
+        if email_verified is None:
+            raise app_exc.UserNotFound
+        if not email_verified:
+            raise app_exc.EmailVerificationRequired
 
     async def get_hashed_password_by_email(self, email: str) -> str | None:
         stmt = (
@@ -88,18 +148,41 @@ class UserRepository(SQLAlchemyRepository):
         return result.scalar_one_or_none()
 
     @translate_repository_errors
-    async def update_user(self, user_id: UUID, data: UpdateUserData) -> User:
+    async def update_user(
+        self,
+        user_id: UUID,
+        data: UpdateUserData,
+    ) -> User:
         values = self._user_update_values(data)
 
-        stmt = (
+        updated_user = (
             update(UserModel)
             .values(**values)
             .where(UserModel.user_id == user_id)
-            .returning(UserModel)
+            .returning(
+                UserModel.user_id,
+                UserModel.first_name,
+                UserModel.middle_name,
+                UserModel.last_name,
+                UserModel.email,
+            )
+            .cte("updated_user")
+        )
+        stmt = select(updated_user, UserEmailVerificationModel.verified_at).join(
+            UserEmailVerificationModel,
+            UserEmailVerificationModel.user_id == updated_user.c.user_id,
         )
 
         result = await self.session.execute(stmt)
-        return self._model_to_user(result.scalar_one())
+        row = result.one()
+        return self._values_to_user(
+            user_id=row.user_id,
+            first_name=row.first_name,
+            middle_name=row.middle_name,
+            last_name=row.last_name,
+            email=row.email,
+            email_verified=row.verified_at is not None,
+        )
 
     async def add_refresh_token(
         self,
@@ -199,13 +282,33 @@ class UserRepository(SQLAlchemyRepository):
         return values
 
     @staticmethod
-    def _model_to_user(model: UserModel) -> User:
-        return User(
+    def _model_to_user(model: UserModel, email_verified: bool) -> User:
+        return UserRepository._values_to_user(
             user_id=model.user_id,
             first_name=model.first_name,
             middle_name=model.middle_name,
             last_name=model.last_name,
             email=model.email,
+            email_verified=email_verified,
+        )
+
+    @staticmethod
+    def _values_to_user(
+        *,
+        user_id: UUID,
+        first_name: str,
+        middle_name: str | None,
+        last_name: str,
+        email: str,
+        email_verified: bool,
+    ) -> User:
+        return User(
+            user_id=user_id,
+            first_name=first_name,
+            middle_name=middle_name,
+            last_name=last_name,
+            email=email,
+            email_verified=email_verified,
         )
 
     @staticmethod

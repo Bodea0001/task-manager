@@ -15,8 +15,10 @@ import {
   createMemo,
   createSignal,
   For,
+  lazy,
   Match,
   Show,
+  Suspense,
   Switch,
 } from 'solid-js'
 
@@ -43,13 +45,34 @@ import {
   removeRecurrenceRuleFromCache,
   removeRecurrenceTemplateFromCache,
 } from '@/entities/recurrence/cache'
-import { RecurrenceTemplateCreationPanel } from '@/features/recurrence-creation/RecurrenceTemplateCreationPanel'
-import { RecurrenceOccurrenceManager } from '@/features/recurrence-occurrences/RecurrenceOccurrenceManager'
-import { RecurrenceRuleEditor } from '@/features/recurrence-rules/RecurrenceRuleEditor'
-import { RecurrenceTagManager } from '@/features/recurrence-tags/RecurrenceTagManager'
 import { useI18n } from '@/shared/i18n/I18nProvider'
 import type { TranslationKey } from '@/shared/i18n/types'
 import { MarkdownContent } from '@/shared/ui/MarkdownContent'
+
+const LazyRecurrenceTemplateCreationPanel = lazy(async () => ({
+  default: (
+    await import(
+      '@/features/recurrence-creation/RecurrenceTemplateCreationPanel'
+    )
+  ).RecurrenceTemplateCreationPanel,
+}))
+const LazyRecurrenceOccurrenceManager = lazy(async () => ({
+  default: (
+    await import(
+      '@/features/recurrence-occurrences/RecurrenceOccurrenceManager'
+    )
+  ).RecurrenceOccurrenceManager,
+}))
+const LazyRecurrenceRuleEditor = lazy(async () => ({
+  default: (
+    await import('@/features/recurrence-rules/RecurrenceRuleEditor')
+  ).RecurrenceRuleEditor,
+}))
+const LazyRecurrenceTagManager = lazy(async () => ({
+  default: (
+    await import('@/features/recurrence-tags/RecurrenceTagManager')
+  ).RecurrenceTagManager,
+}))
 
 const priorityLabelKeys: Record<TaskPriority, TranslationKey> = {
   low: 'recurring.priority.low',
@@ -89,7 +112,7 @@ const businessDayPolicyLabelKeys: Record<
   previous_business_day: 'recurring.rules.editor.businessDay.previous',
 }
 
-export function RecurringPage() {
+export function RecurringPage(props: { emailVerified: boolean }) {
   const queryClient = useQueryClient()
   const { formatDateTime, t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams<{
@@ -126,8 +149,10 @@ export function RecurringPage() {
     setSearchParams({ create: undefined, template: template.template_id })
   }
 
-  const openCreation = () =>
+  const openCreation = () => {
+    if (!props.emailVerified) return
     setSearchParams({ create: '1', template: undefined })
+  }
 
   const closeCreation = () => {
     setSearchParams({ create: undefined }, { replace: true })
@@ -139,18 +164,43 @@ export function RecurringPage() {
     queueMicrotask(() => recurringTitle?.focus())
   }
 
+  createEffect(() => {
+    if (!props.emailVerified && isCreating()) {
+      setSearchParams({ create: undefined }, { replace: true })
+    }
+  })
+
   return (
     <section class="recurring-page" aria-label={t('recurring.title')}>
-      <Show when={isCreating()}>
-        <RecurrenceTemplateCreationPanel
-          onCancel={closeCreation}
-          onCreated={(template) => {
-            setSearchParams(
-              { create: undefined, template: template.template_id },
-              { replace: true },
-            )
-          }}
-        />
+      <Show when={!props.emailVerified}>
+        <div class="recurring-access-notice" role="status">
+          <AlertCircle size={17} strokeWidth={1.9} aria-hidden="true" />
+          <div>
+            <strong>{t('recurring.access.title')}</strong>
+            <span>{t('recurring.access.message')}</span>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={isCreating() && props.emailVerified}>
+        <Suspense
+          fallback={
+            <RecurringLazyState
+              label={t('recurring.states.loading')}
+              spacious
+            />
+          }
+        >
+          <LazyRecurrenceTemplateCreationPanel
+            onCancel={closeCreation}
+            onCreated={(template) => {
+              setSearchParams(
+                { create: undefined, template: template.template_id },
+                { replace: true },
+              )
+            }}
+          />
+        </Suspense>
       </Show>
 
       <Show when={!isCreating() && selectedTemplateId() === undefined}>
@@ -167,7 +217,14 @@ export function RecurringPage() {
             <p>{t('recurring.description')}</p>
           </div>
           <Show when={(templatesQuery.data?.templates.length || 0) > 0}>
-            <button type="button" onClick={openCreation}>
+            <button
+              type="button"
+              disabled={!props.emailVerified}
+              title={
+                props.emailVerified ? undefined : t('recurring.access.actionHint')
+              }
+              onClick={openCreation}
+            >
               <Plus size={15} strokeWidth={2.1} />
               {t('recurring.creation.action')}
             </button>
@@ -210,6 +267,7 @@ export function RecurringPage() {
           <Match when={filteredTemplates().length === 0}>
             <RecurringEmptyState
               hasSearch={searchText().trim().length > 0}
+              canCreate={props.emailVerified}
               onCreate={openCreation}
             />
           </Match>
@@ -263,6 +321,7 @@ export function RecurringPage() {
       <Show when={!isCreating() && selectedTemplateId()}>
         {(templateId) => (
           <RecurringDetails
+            emailVerified={props.emailVerified}
             templateId={templateId()}
             onClose={closeDetails}
             onDeleted={closeDetails}
@@ -278,6 +337,7 @@ type PendingDeletion =
   | { kind: 'template' }
 
 function RecurringDetails(props: {
+  emailVerified: boolean
   templateId: string
   onClose: () => void
   onDeleted: () => void
@@ -306,13 +366,13 @@ function RecurringDetails(props: {
     mutationFn: (rule: RecurrenceRule) =>
       deleteRecurrenceRule(rule.recurrence_id),
     onSuccess: (_, rule) => {
+      setPendingDeletion()
       removeRecurrenceRuleFromCache(
         queryClient,
         rule.template_id,
         rule.recurrence_id,
       )
       void invalidateTaskLists(queryClient)
-      setPendingDeletion()
     },
   }))
   const isDeletionPending = () =>
@@ -420,7 +480,15 @@ function RecurringDetails(props: {
 
                 <section class="recurring-details-section">
                   <h2>{t('recurring.occurrences.title')}</h2>
-                  <RecurrenceOccurrenceManager template={template} />
+                  <Suspense
+                    fallback={
+                      <RecurringLazyState
+                        label={t('recurring.occurrences.loading')}
+                      />
+                    }
+                  >
+                    <LazyRecurrenceOccurrenceManager template={template} />
+                  </Suspense>
                 </section>
 
                 <section class="recurring-details-section">
@@ -428,6 +496,12 @@ function RecurringDetails(props: {
                     <h2>{t('recurring.details.rules')}</h2>
                     <button
                       type="button"
+                      disabled={!props.emailVerified}
+                      title={
+                        props.emailVerified
+                          ? undefined
+                          : t('recurring.access.actionHint')
+                      }
                       onClick={() => setEditedRuleId('new')}
                     >
                       <Plus size={14} strokeWidth={2.1} />
@@ -440,6 +514,7 @@ function RecurringDetails(props: {
                         <RecurrenceRuleItem
                           rule={rule}
                           disabled={isDeletionPending()}
+                          canEdit={props.emailVerified}
                           onEdit={() => setEditedRuleId(rule.recurrence_id)}
                           onDelete={() => requestDeletion({ kind: 'rule', rule })}
                         />
@@ -451,17 +526,25 @@ function RecurringDetails(props: {
                   </Show>
                   <Show keyed when={editedRuleId()}>
                     {(ruleId) => (
-                      <RecurrenceRuleEditor
-                        templateId={template.template_id}
-                        rule={
-                          ruleId === 'new'
-                            ? undefined
-                            : template.rules.find(
-                                (rule) => rule.recurrence_id === ruleId,
-                              )
+                      <Suspense
+                        fallback={
+                          <RecurringLazyState
+                            label={t('recurring.states.loading')}
+                          />
                         }
-                        onClose={() => setEditedRuleId()}
-                      />
+                      >
+                        <LazyRecurrenceRuleEditor
+                          templateId={template.template_id}
+                          rule={
+                            ruleId === 'new'
+                              ? undefined
+                              : template.rules.find(
+                                  (rule) => rule.recurrence_id === ruleId,
+                                )
+                          }
+                          onClose={() => setEditedRuleId()}
+                        />
+                      </Suspense>
                     )}
                   </Show>
                   <Show when={pendingDeletion()?.kind === 'rule'}>
@@ -480,7 +563,13 @@ function RecurringDetails(props: {
 
                 <section class="recurring-details-section">
                   <h2>{t('recurring.details.manageTags')}</h2>
-                  <RecurrenceTagManager template={template} />
+                  <Suspense
+                    fallback={
+                      <RecurringLazyState label={t('recurring.tags.loading')} />
+                    }
+                  >
+                    <LazyRecurrenceTagManager template={template} />
+                  </Suspense>
                 </section>
 
                 <Show when={pendingDeletion()?.kind === 'template'}>
@@ -505,6 +594,7 @@ function RecurringDetails(props: {
 }
 
 function RecurrenceRuleItem(props: {
+  canEdit: boolean
   disabled: boolean
   onDelete: () => void
   onEdit: () => void
@@ -610,11 +700,15 @@ function RecurrenceRuleItem(props: {
       <div class="recurring-rule-actions">
         <button
           type="button"
-          disabled={props.disabled}
+          disabled={props.disabled || !props.canEdit}
           aria-label={t('recurring.rules.actions.editNamed', {
             name: t(frequencyLabelKeys[props.rule.frequency]),
           })}
-          title={t('recurring.rules.actions.edit')}
+          title={
+            props.canEdit
+              ? t('recurring.rules.actions.edit')
+              : t('recurring.access.actionHint')
+          }
           onClick={() => props.onEdit()}
         >
           <Pencil size={14} strokeWidth={1.9} />
@@ -716,6 +810,7 @@ function RecurringErrorState(props: { onRetry: () => void }) {
 }
 
 function RecurringEmptyState(props: {
+  canCreate: boolean
   hasSearch: boolean
   onCreate: () => void
 }) {
@@ -738,7 +833,14 @@ function RecurringEmptyState(props: {
         )}
       </p>
       <Show when={!props.hasSearch}>
-        <button type="button" onClick={() => props.onCreate()}>
+        <button
+          type="button"
+          disabled={!props.canCreate}
+          title={
+            props.canCreate ? undefined : t('recurring.access.actionHint')
+          }
+          onClick={() => props.onCreate()}
+        >
           <Plus size={14} strokeWidth={2.1} />
           {t('recurring.creation.action')}
         </button>
@@ -759,6 +861,20 @@ function RecurringListSkeleton() {
           </span>
         )}
       </For>
+    </div>
+  )
+}
+
+function RecurringLazyState(props: { label: string; spacious?: boolean }) {
+  return (
+    <div
+      class="recurring-lazy-state"
+      classList={{ 'recurring-lazy-state--spacious': props.spacious }}
+      role="status"
+      aria-label={props.label}
+    >
+      <LoaderCircle class="spin" size={22} strokeWidth={1.8} />
+      <span>{props.label}</span>
     </div>
   )
 }

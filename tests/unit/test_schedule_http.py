@@ -66,6 +66,7 @@ def _authenticated_user() -> User:
         first_name="First",
         last_name="Last",
         email="user@example.com",
+        email_verified=True,
     )
 
 

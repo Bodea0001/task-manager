@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from models.chats import Chat
     from models.tags import Tag
     from models.tasks import Task
+    from models.agent_usage import UserAgentRunUsage
 
 
 class User(Base):
@@ -28,6 +29,15 @@ class User(Base):
 
     auth: Mapped["UserAuth | None"] = relationship(
         "UserAuth", back_populates="user", uselist=False, cascade="all, delete-orphan"
+    )
+    email_verification: Mapped["UserEmailVerification | None"] = relationship(
+        "UserEmailVerification",
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    agent_run_usage: Mapped[list["UserAgentRunUsage"]] = relationship(
+        "UserAgentRunUsage", back_populates="user", cascade="all, delete-orphan"
     )
     refresh_tokens: Mapped[list["UserRefreshToken"]] = relationship(
         "UserRefreshToken", back_populates="user", cascade="all, delete-orphan"
@@ -61,6 +71,24 @@ class UserAuth(Base):
     user: Mapped[User] = relationship("User", back_populates="auth")
 
     __table_args__ = (CheckConstraint("length(hashed_password) > 0", "non_empty_hashed_password"),)
+
+
+class UserEmailVerification(Base):
+    __tablename__ = "user_email_verification"
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("user.user_id", ondelete="CASCADE"),
+        primary_key=True,
+        comment="Идентификатор пользователя",
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+        comment="Дата/время подтверждения email",
+    )
+
+    user: Mapped[User] = relationship("User", back_populates="email_verification")
 
 
 class UserRefreshToken(Base):

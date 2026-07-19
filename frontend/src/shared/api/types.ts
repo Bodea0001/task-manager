@@ -7,6 +7,7 @@ export interface ApiErrorDetail {
 
 export interface ApiErrorResponse {
   code: string
+  context?: Record<string, unknown>
   details?: readonly ApiErrorDetail[]
   message: string
   request_id?: string

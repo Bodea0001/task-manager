@@ -103,14 +103,12 @@ def test_login_user_email_is_normalized() -> None:
 def test_user_update_data_is_normalized() -> None:
     # Act
     data = UpdateUserData(
-        email="  Updated.User@Example.COM ",
         first_name="  Updated   First  ",
         last_name="  Updated   Last  ",
         middle_name="  Updated   Middle  ",
     )
 
     # Assert
-    assert data.email == "updated.user@example.com"
     assert data.first_name == "Updated First"
     assert data.last_name == "Updated Last"
     assert data.middle_name == "Updated Middle"
@@ -132,8 +130,6 @@ def test_user_update_can_explicitly_clear_middle_name() -> None:
 @pytest.mark.parametrize(
     "data",
     [
-        {"email": "invalid-email"},
-        {"email": "x" * 309 + "@example.com"},
         {"first_name": ""},
         {"first_name": " "},
         {"first_name": "x" * 251},

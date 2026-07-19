@@ -14,7 +14,6 @@ export interface RegistrationData extends LoginCredentials {
 }
 
 export interface UpdateUserData {
-  email?: string
   first_name?: string
   last_name?: string
   middle_name?: string | null

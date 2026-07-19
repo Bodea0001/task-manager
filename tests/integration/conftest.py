@@ -21,6 +21,7 @@ TEST_OTHER_USER_EMAIL = "test-other-user@example.com"
 TEST_DATABASE_NAME_PARTS = {"test", "testing", "pytest"}
 TEST_TABLES = (
     "audit_event",
+    "user_agent_run_usage",
     "user_refresh_token",
     "chat_message",
     "task_recurrence_instance_override",
@@ -38,6 +39,7 @@ TEST_TABLES = (
     "tag",
     "chat",
     "user_auth",
+    "user_email_verification",
     '"user"',
 )
 
@@ -145,6 +147,14 @@ def user_service(test_engine: AsyncEngine):
 
 
 @pytest.fixture
+def agent_usage_service(test_engine: AsyncEngine):
+    from services.agent_usage import AgentUsageService
+    from adapters.unitofwork import SQLAlchemyUnitOfWork
+
+    return AgentUsageService(SQLAlchemyUnitOfWork(test_engine))
+
+
+@pytest.fixture
 def chat_service(test_engine: AsyncEngine):
     from adapters.unitofwork import SQLAlchemyUnitOfWork
     from services.chats import ChatService
@@ -161,6 +171,13 @@ async def _create_test_user(engine: AsyncEngine, user_id: UUID, email: str) -> N
                 ON CONFLICT (user_id) DO NOTHING
             """),
             {"user_id": user_id, "email": email},
+        )
+        await connection.execute(
+            text("""
+                INSERT INTO user_email_verification(user_id, verified_at)
+                VALUES (:user_id, CURRENT_TIMESTAMP)
+            """),
+            {"user_id": user_id},
         )
 
 

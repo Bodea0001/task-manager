@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import exceptions as app_exc
 from agents.app import AgentApplication
 from services.auth import AuthService
+from services.agent_usage import AgentUsageService
 from services.chats import ChatService
 from services.tags import TagService
 from services.tasks import TaskService
@@ -47,6 +48,12 @@ def get_user_service(
     container: Annotated[ApplicationContainer, Depends(get_application_container)],
 ) -> UserService:
     return container.user_service
+
+
+def get_agent_usage_service(
+    container: Annotated[ApplicationContainer, Depends(get_application_container)],
+) -> AgentUsageService:
+    return container.agent_usage_service
 
 
 def get_task_service(
@@ -125,7 +132,16 @@ async def get_current_user(
     return user
 
 
+async def require_recurrence_expansion_access(
+    current_user: Annotated[User, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+) -> None:
+    """Reject recurrence expansion before entering inner application layers."""
+    await user_service.require_email_verified(current_user.user_id)
+
+
 AuthServiceDependency = Annotated[AuthService, Depends(get_auth_service)]
+AgentUsageServiceDependency = Annotated[AgentUsageService, Depends(get_agent_usage_service)]
 UserServiceDependency = Annotated[UserService, Depends(get_user_service)]
 TaskServiceDependency = Annotated[TaskService, Depends(get_task_service)]
 TagServiceDependency = Annotated[TagService, Depends(get_tag_service)]

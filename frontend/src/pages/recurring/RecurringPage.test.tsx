@@ -15,6 +15,54 @@ afterEach(async () => {
 })
 
 describe('Recurring tasks workspace', () => {
+  it('keeps existing recurrence available while verified-only actions are unavailable', async () => {
+    window.history.replaceState({}, '', '/recurring')
+    const template = createTemplate()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (isOccurrenceListRequest(url)) {
+          return Promise.resolve(jsonResponse({ occurrences: [] }))
+        }
+        if (url === '/api/v1/tags') {
+          return Promise.resolve(jsonResponse({ tags: template.tags }))
+        }
+        return Promise.resolve(jsonResponse({ templates: [template] }))
+      }),
+    )
+    renderRecurringPage(false)
+
+    expect(
+      await screen.findByText('Email verification required for new recurrence'),
+    ).toBeVisible()
+    await screen.findByRole('button', {
+      name: `Open recurring task ${template.title}`,
+    })
+    expect(
+      screen.getByRole('button', { name: 'New recurring task' }),
+    ).toBeDisabled()
+
+    await fireEvent.click(
+      screen.getByRole('button', {
+        name: `Open recurring task ${template.title}`,
+      }),
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Add rule' }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Edit Weekly rule' }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: 'Delete Weekly rule' }),
+    ).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: 'Delete recurring task' }),
+    ).toBeEnabled()
+  })
+
   it('returns from recurring task creation to the workspace', async () => {
     window.history.replaceState({}, '', '/recurring')
     vi.stubGlobal(
@@ -33,7 +81,11 @@ describe('Recurring tasks workspace', () => {
       await screen.findByRole('button', { name: 'New recurring task' }),
     )
     expect(
-      await screen.findByRole('heading', { name: 'New recurring task' }),
+      await screen.findByRole(
+        'heading',
+        { name: 'New recurring task' },
+        { timeout: 5_000 },
+      ),
     ).toBeVisible()
     await fireEvent.click(
       screen.getAllByRole('button', { name: 'Back to recurring tasks' })[0],
@@ -42,7 +94,9 @@ describe('Recurring tasks workspace', () => {
     expect(
       await screen.findByRole('button', { name: 'New recurring task' }),
     ).toBeVisible()
-    expect(new URLSearchParams(window.location.search).has('create')).toBe(false)
+    await waitFor(() =>
+      expect(new URLSearchParams(window.location.search).has('create')).toBe(false),
+    )
   })
 
   it('finds a recurring task and explains its repeat rules', async () => {
@@ -69,7 +123,10 @@ describe('Recurring tasks workspace', () => {
       <I18nProvider>
         <QueryClientProvider client={queryClient}>
           <Router>
-            <Route path="/recurring" component={RecurringPage} />
+            <Route
+              path="/recurring"
+              component={() => <RecurringPage emailVerified />}
+            />
           </Router>
         </QueryClientProvider>
       </I18nProvider>
@@ -99,7 +156,7 @@ describe('Recurring tasks workspace', () => {
     ).toBeVisible()
     expect(screen.getByText('Every 2 weeks')).toBeVisible()
     expect(screen.getByText('Ends after 5 occurrences')).toBeVisible()
-    expect(screen.getByText('Health')).toBeVisible()
+    expect(await screen.findByText('Health')).toBeVisible()
     expect(
       screen.getByRole('heading', { name: 'Description' }).parentElement,
     ).toHaveTextContent('Take after breakfast.')
@@ -210,14 +267,21 @@ describe('Recurring tasks workspace', () => {
       ).toBe(true),
     )
 
-    await fireEvent.input(
-      screen.getByRole('textbox', { name: 'Find or create a tag' }),
-      { target: { value: fitnessTag.name } },
+    await waitFor(() =>
+      expect(
+        screen.getByRole('textbox', { name: 'Find or create a tag' }),
+      ).toBeEnabled(),
     )
-    await fireEvent.click(
-      screen.getByRole('button', { name: 'Create and add tag' }),
-    )
-    expect(screen.getByText(`Create and add “${fitnessTag.name}”?`)).toBeVisible()
+    const tagInput = screen.getByRole('textbox', { name: 'Find or create a tag' })
+    await fireEvent.input(tagInput, { target: { value: fitnessTag.name } })
+    const createTagButton = screen.getByRole('button', {
+      name: 'Create and add tag',
+    })
+    await waitFor(() => expect(createTagButton).toBeEnabled())
+    await fireEvent.click(createTagButton)
+    expect(
+      await screen.findByText(`Create and add “${fitnessTag.name}”?`),
+    ).toBeVisible()
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>
@@ -305,7 +369,7 @@ describe('Recurring tasks workspace', () => {
       await screen.findByRole('button', { name: 'Add rule' }),
     )
     await fireEvent.input(
-      screen.getByRole('textbox', { name: 'Rule start date' }),
+      await screen.findByRole('textbox', { name: 'Rule start date' }),
       {
         target: { value: '07/20/2026' },
       },
@@ -358,7 +422,7 @@ describe('Recurring tasks workspace', () => {
       screen.getByRole('button', { name: 'Edit Weekly rule' }),
     )
     await fireEvent.input(
-      screen.getByRole('textbox', { name: 'Rule start date' }),
+      await screen.findByRole('textbox', { name: 'Rule start date' }),
       { target: { value: '07/20/2026' } },
     )
     await fireEvent.input(
@@ -432,7 +496,7 @@ describe('Recurring tasks workspace', () => {
       await screen.findByRole('button', { name: 'New recurring task' }),
     )
     await fireEvent.input(
-      screen.getByRole('textbox', { name: 'Task name' }),
+      await screen.findByRole('textbox', { name: 'Task name' }),
       { target: { value: createdTemplate.title } },
     )
     await fireEvent.click(
@@ -826,7 +890,7 @@ describe('Recurring tasks workspace', () => {
   })
 })
 
-function renderRecurringPage() {
+function renderRecurringPage(emailVerified = true) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -837,7 +901,12 @@ function renderRecurringPage() {
     <I18nProvider>
       <QueryClientProvider client={queryClient}>
         <Router>
-          <Route path="/recurring" component={RecurringPage} />
+          <Route
+            path="/recurring"
+            component={() => (
+              <RecurringPage emailVerified={emailVerified} />
+            )}
+          />
         </Router>
       </QueryClientProvider>
     </I18nProvider>
@@ -845,7 +914,12 @@ function renderRecurringPage() {
 }
 
 async function chooseOption(triggerName: string | RegExp, optionName: string) {
-  await fireEvent.keyDown(screen.getByRole('button', { name: triggerName }), {
+  const trigger = await screen.findByRole(
+    'button',
+    { name: triggerName },
+    { timeout: 5_000 },
+  )
+  await fireEvent.keyDown(trigger, {
     key: 'ArrowDown',
   })
   await fireEvent.click(await screen.findByRole('option', { name: optionName }))

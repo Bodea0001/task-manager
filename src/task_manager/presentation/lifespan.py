@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from config import settings
 from agents.app import AgentApplication
 from services.auth import AuthService
+from services.agent_usage import AgentUsageService
 from services.chats import ChatService
 from services.tags import TagService
 from services.tasks import TaskService
@@ -108,6 +109,7 @@ async def create_application_container() -> ApplicationContainer:
 
     try:
         auth_service = AuthService(uow)
+        agent_usage_service = AgentUsageService(uow)
         user_service = UserService(uow)
         task_service = TaskService(uow)
         tag_service = TagService(uow)
@@ -118,6 +120,7 @@ async def create_application_container() -> ApplicationContainer:
             task_service=task_service,
             tag_service=tag_service,
             chat_service=chat_service,
+            agent_usage_service=agent_usage_service,
             run_lock_manager=RedisAgentRunLockManager(
                 key_value_store_client,
                 settings.coordination,
@@ -149,6 +152,7 @@ async def create_application_container() -> ApplicationContainer:
         engine=engine,
         uow=uow,
         auth_service=auth_service,
+        agent_usage_service=agent_usage_service,
         user_service=user_service,
         task_service=task_service,
         tag_service=tag_service,

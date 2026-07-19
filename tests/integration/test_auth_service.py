@@ -32,6 +32,7 @@ async def test_user_can_register_and_get_current_user(auth_service: AuthService)
     assert tokens.access_token
     assert tokens.refresh_token
     assert current_user.email == "new.user@example.com"
+    assert current_user.email_verified is False
     assert current_user.first_name == "New"
     assert current_user.last_name == "User"
 
@@ -296,7 +297,6 @@ async def test_user_can_update_profile(
     updated_user = await user_service.update_user(
         current_user.user_id,
         UpdateUserData(
-            email=" Updated.Profile@Example.com ",
             first_name="  Updated  ",
             last_name="  Profile  ",
             middle_name="  Middle  ",
@@ -304,7 +304,7 @@ async def test_user_can_update_profile(
     )
 
     # Assert
-    assert updated_user.email == "updated.profile@example.com"
+    assert updated_user.email == "profile@example.com"
     assert updated_user.first_name == "Updated"
     assert updated_user.last_name == "Profile"
     assert updated_user.middle_name == "Middle"
@@ -317,7 +317,6 @@ async def test_user_can_update_profile(
         (UpdateUserData(first_name="OnlyFirst"), "first_name", "OnlyFirst"),
         (UpdateUserData(last_name="OnlyLast"), "last_name", "OnlyLast"),
         (UpdateUserData(middle_name="OnlyMiddle"), "middle_name", "OnlyMiddle"),
-        (UpdateUserData(email="only-email@example.com"), "email", "only-email@example.com"),
     ),
 )
 async def test_user_can_update_profile_partially(
@@ -367,35 +366,3 @@ async def test_user_can_clear_middle_name(
     )
 
     assert updated_user.middle_name is None
-
-
-@pytest.mark.asyncio
-async def test_user_cannot_update_profile_to_existing_email(
-    auth_service: AuthService,
-    user_service: UserService,
-) -> None:
-    # Arrange
-    first_tokens = await auth_service.register(
-        RegisterUser(
-            email="first-profile@example.com",
-            password="correct-password",
-            first_name="First",
-            last_name="User",
-        )
-    )
-    await auth_service.register(
-        RegisterUser(
-            email="second-profile@example.com",
-            password="correct-password",
-            first_name="Second",
-            last_name="User",
-        )
-    )
-    first_user = await auth_service.get_current_user(first_tokens.access_token)
-
-    # Act / Assert
-    with pytest.raises(EmailAlreadyExists):
-        await user_service.update_user(
-            first_user.user_id,
-            UpdateUserData(email="second-profile@example.com"),
-        )
