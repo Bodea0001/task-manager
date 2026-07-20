@@ -86,6 +86,90 @@ describe('authentication', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('explains when sign-in attempts are temporarily limited', async () => {
+    await changeLocale('ru')
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        String(input).endsWith('/auth/login')
+          ? jsonResponse(
+              {
+                code: 'rate_limit_exceeded',
+                context: { retry_after_seconds: 17 },
+                message: 'Too many requests',
+                request_id: 'rate-limit-request-id',
+              },
+              429,
+            )
+          : jsonResponse({}, 404),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(() => <App />)
+
+    const emailInput = await screen.findByLabelText('Электронная почта')
+    await fireEvent.input(emailInput, {
+      target: { value: 'alex@example.com' },
+    })
+    await fireEvent.input(screen.getByLabelText('Пароль'), {
+      target: { value: 'correct-password' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Войти' }))
+
+    expect(
+      await screen.findByText(
+        'Слишком много попыток. Повторите через 17 секунд.',
+      ),
+    ).toBeVisible()
+    expect(emailInput).toHaveValue('alex@example.com')
+    expect(screen.getByRole('button', { name: 'Войти' })).toBeEnabled()
+  })
+
+  it('explains when registration is unavailable for the current network', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        String(input).endsWith('/auth/register')
+          ? jsonResponse(
+              {
+                code: 'registration_limit_exceeded',
+                message: 'Registration limit exceeded',
+                request_id: 'registration-limit-request-id',
+              },
+              429,
+            )
+          : jsonResponse({}, 404),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(() => <App />)
+
+    await fireEvent.click(
+      await screen.findByRole('link', { name: 'Create an account' }),
+    )
+    await fireEvent.input(await screen.findByLabelText('First name'), {
+      target: { value: 'Alex' },
+    })
+    await fireEvent.input(screen.getByLabelText('Last name'), {
+      target: { value: 'Morgan' },
+    })
+    const emailInput = screen.getByLabelText('Email')
+    await fireEvent.input(emailInput, {
+      target: { value: 'alex@example.com' },
+    })
+    await fireEvent.input(screen.getByLabelText(/^Password/), {
+      target: { value: 'correct-password' },
+    })
+    await fireEvent.click(
+      screen.getByRole('button', { name: 'Create account' }),
+    )
+
+    expect(
+      await screen.findByText(
+        'No more accounts can be created from this network.',
+      ),
+    ).toBeVisible()
+    expect(emailInput).toHaveValue('alex@example.com')
+  })
+
   it('keeps submitted values and associates server validation with its field', async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) =>
       Promise.resolve(

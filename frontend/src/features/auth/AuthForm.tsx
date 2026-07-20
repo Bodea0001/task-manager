@@ -23,7 +23,10 @@ import {
 } from '@/shared/forms/validation'
 import { supportedLocales } from '@/shared/i18n/config'
 import { useI18n } from '@/shared/i18n/I18nProvider'
-import type { TranslationKey } from '@/shared/i18n/types'
+import type {
+  TranslationKey,
+  TranslationOptions,
+} from '@/shared/i18n/types'
 import { BrandMark } from '@/shared/ui/BrandMark'
 import { FormErrorSummary } from '@/shared/ui/FormErrorSummary'
 
@@ -38,6 +41,11 @@ type AuthFieldIssue =
   | InputValidationIssue
   | { code: 'password_whitespace' }
 type AuthFieldIssues = Partial<Record<AuthFieldName, AuthFieldIssue>>
+interface AuthErrorPresentation {
+  key: TranslationKey
+  options?: TranslationOptions
+}
+
 const authFieldNames: readonly AuthFieldName[] = [
   'email',
   'first_name',
@@ -51,7 +59,8 @@ export function AuthForm(props: { mode: AuthMode }) {
   const { locale, setLocale, t } = useI18n()
   const [isSubmitting, setSubmitting] = createSignal(false)
   const [isPasswordVisible, setPasswordVisible] = createSignal(false)
-  const [errorKey, setErrorKey] = createSignal<TranslationKey>()
+  const [errorPresentation, setErrorPresentation] =
+    createSignal<AuthErrorPresentation>()
   const [apiError, setApiError] = createSignal<FormApiError>()
   const [fieldIssues, setFieldIssues] = createSignal<AuthFieldIssues>({})
   const isRegistration = () => props.mode === 'register'
@@ -96,13 +105,13 @@ export function AuthForm(props: { mode: AuthMode }) {
       delete next[name]
       return next
     })
-    setErrorKey()
+    setErrorPresentation()
     setApiError((current) => clearFormApiField(current, name))
   }
 
   const submit = async (form: FormData) => {
     setSubmitting(true)
-    setErrorKey()
+    setErrorPresentation()
     setApiError()
 
     try {
@@ -122,7 +131,7 @@ export function AuthForm(props: { mode: AuthMode }) {
       }
     } catch (error) {
       setApiError(toFormApiError(error, { fields: authFieldNames }))
-      setErrorKey(getAuthErrorKey(error))
+      setErrorPresentation(getAuthErrorPresentation(error))
     } finally {
       setSubmitting(false)
     }
@@ -277,18 +286,20 @@ export function AuthForm(props: { mode: AuthMode }) {
             </Show>
           </label>
 
-          <Show when={errorKey() !== undefined}>
-            <FormErrorSummary
-              error={apiError()}
-              message={t(errorKey()!)}
-              fieldLabels={{
-                email: t('auth.fields.email'),
-                first_name: t('auth.fields.firstName'),
-                last_name: t('auth.fields.lastName'),
-                middle_name: t('auth.fields.middleName'),
-                password: t('auth.fields.password'),
-              }}
-            />
+          <Show when={errorPresentation()}>
+            {(presentation) => (
+              <FormErrorSummary
+                error={apiError()}
+                message={t(presentation().key, presentation().options)}
+                fieldLabels={{
+                  email: t('auth.fields.email'),
+                  first_name: t('auth.fields.firstName'),
+                  last_name: t('auth.fields.lastName'),
+                  middle_name: t('auth.fields.middleName'),
+                  password: t('auth.fields.password'),
+                }}
+              />
+            )}
           </Show>
 
           <button
@@ -432,15 +443,32 @@ function formatAuthFieldError(
   return typeof error === 'string' ? error : formatValidationIssue(t, error)
 }
 
-function getAuthErrorKey(error: unknown): TranslationKey {
+function getAuthErrorPresentation(error: unknown): AuthErrorPresentation {
   if (!(error instanceof ApiError)) {
-    return 'auth.errors.unavailable'
+    return { key: 'auth.errors.unavailable' }
   }
 
   const errorKeys: Partial<Record<string, TranslationKey>> = {
+    auth_protection_unavailable: 'auth.errors.protectionUnavailable',
     invalid_credentials: 'auth.errors.invalidCredentials',
+    invalid_client_address: 'auth.errors.invalidClientAddress',
     email_already_exists: 'auth.errors.emailExists',
+    registration_limit_exceeded: 'auth.errors.registrationLimit',
     request_validation_error: 'auth.errors.validation',
   }
-  return errorKeys[error.code] || 'auth.errors.generic'
+
+  if (error.code === 'rate_limit_exceeded') {
+    const retryAfterSeconds = error.context?.retry_after_seconds
+    return {
+      key: 'auth.errors.rateLimited',
+      options:
+        typeof retryAfterSeconds === 'number' &&
+        Number.isFinite(retryAfterSeconds) &&
+        retryAfterSeconds > 0
+          ? { count: Math.ceil(retryAfterSeconds) }
+          : undefined,
+    }
+  }
+
+  return { key: errorKeys[error.code] || 'auth.errors.generic' }
 }

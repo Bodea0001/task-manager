@@ -29,6 +29,17 @@ export const auth = {
   errors: {
     invalidCredentials: 'The email or password is incorrect.',
     emailExists: 'An account with this email already exists.',
+    rateLimited: 'Too many attempts. Wait briefly and try again.',
+    rateLimited_one: 'Too many attempts. Try again in {{count}} second.',
+    rateLimited_few: 'Too many attempts. Try again in {{count}} seconds.',
+    rateLimited_many: 'Too many attempts. Try again in {{count}} seconds.',
+    rateLimited_other: 'Too many attempts. Try again in {{count}} seconds.',
+    registrationLimit:
+      'No more accounts can be created from this network.',
+    protectionUnavailable:
+      'Sign-in and registration are temporarily unavailable. Try again later.',
+    invalidClientAddress:
+      'The request could not be verified. Reload the page and try again.',
     validation: 'Check the entered information and try again.',
     unavailable: 'The server is unavailable. Check the connection and try again.',
     generic: 'The request could not be completed. Try again.',

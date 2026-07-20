@@ -1,8 +1,19 @@
 from exceptions.base import BaseAppException
-from exceptions.access import AgentQuotaExhausted, EmailVerificationRequired, Forbidden
+from exceptions.access import (
+    AgentQuotaExhausted,
+    EmailVerificationRequired,
+    Forbidden,
+    InvalidClientAddress,
+    RegistrationLimitExceeded,
+    RequestRateLimitExceeded,
+)
 from exceptions.wrong import Wrongness, WrongTaskInterval, TaskScheduleOverlap
 from exceptions.auth import AuthError, InvalidCredentials, InvalidRequestOrigin, InvalidToken
-from exceptions.unavailable import Unavailable, AgentCoordinationUnavailable
+from exceptions.unavailable import (
+    AgentCoordinationUnavailable,
+    AuthProtectionUnavailable,
+    Unavailable,
+)
 from exceptions.conflict import (
     Conflict,
     AgentRunInProgress,
@@ -26,12 +37,16 @@ __all__ = [
     "Forbidden",
     "EmailVerificationRequired",
     "AgentQuotaExhausted",
+    "RequestRateLimitExceeded",
+    "RegistrationLimitExceeded",
+    "InvalidClientAddress",
     "AuthError",
     "InvalidCredentials",
     "InvalidRequestOrigin",
     "InvalidToken",
     "Unavailable",
     "AgentCoordinationUnavailable",
+    "AuthProtectionUnavailable",
     "Conflict",
     "AgentRunInProgress",
     "EmailAlreadyExists",

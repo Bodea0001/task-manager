@@ -6,6 +6,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from config import HTTPConfig, settings
 from presentation.auth_cookies import RefreshTokenCookie
+from presentation.client_address import TrustedClientAddressResolver
 from presentation.errors import register_exception_handlers
 from presentation.lifespan import application_lifespan
 from presentation.middlewares import RequestContextMiddleware, RequestLoggingMiddleware
@@ -34,6 +35,9 @@ def create_app(config: HTTPConfig | None = None) -> FastAPI:
         lifespan=application_lifespan,
     )
     app.state.refresh_token_cookie = RefreshTokenCookie(http_config)
+    app.state.client_address_resolver = TrustedClientAddressResolver(
+        http_config.trusted_proxy_networks
+    )
     register_exception_handlers(app)
     for router in unversioned_routers:
         app.include_router(router)
@@ -68,6 +72,7 @@ def _configure_middleware(app: FastAPI, config: HTTPConfig) -> None:
             allow_credentials=True,
             allow_methods=["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"],
             allow_headers=["Accept", "Authorization", "Content-Type"],
+            expose_headers=["Retry-After", "X-Request-ID"],
         )
 
     if config.trusted_hosts:

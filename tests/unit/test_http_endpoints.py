@@ -21,8 +21,10 @@ from domain.value_objects.tasks import Task, TaskStatus
 from domain.value_objects.users import AuthTokens, User
 from domain.value_objects.agent_usage import AgentAccessLevel, AgentRunAllowance
 from presentation.app import create_app
+from presentation.auth_protection import RateLimitDecision, RegistrationPermit
 from presentation.dependencies import (
     get_auth_service,
+    get_anonymous_auth_protection,
     get_agent_usage_service,
     get_current_user,
     get_tag_service,
@@ -38,11 +40,15 @@ class SuccessfulAuthService:
     def __init__(self) -> None:
         self.refreshed_tokens: list[str] = []
         self.revoked_tokens: list[str] = []
+        self.register_calls = 0
+        self.login_calls = 0
 
     async def register(self, data) -> AuthTokens:
+        self.register_calls += 1
         return AuthTokens(access_token="access-token", refresh_token="refresh-token")
 
     async def login(self, data) -> AuthTokens:
+        self.login_calls += 1
         return AuthTokens(access_token="access-token", refresh_token="refresh-token")
 
     async def refresh(self, refresh_token: str) -> AuthTokens:
@@ -58,6 +64,7 @@ class SuccessfulAuthService:
 
 class InvalidCredentialsAuthService(SuccessfulAuthService):
     async def login(self, data) -> AuthTokens:
+        self.login_calls += 1
         raise app_exc.InvalidCredentials
 
 
@@ -165,10 +172,63 @@ class ConflictingTagService(TagWorkflowService):
         raise app_exc.TagAlreadyExists
 
 
+class RegistrationPermitWorkflow:
+    def __init__(self) -> None:
+        self.confirmed = False
+        self.released = False
+
+    async def confirm(self) -> None:
+        self.confirmed = True
+
+    async def release(self) -> None:
+        self.released = True
+
+
+class AuthProtectionWorkflow:
+    def __init__(self) -> None:
+        self.registration_decision = RateLimitDecision(allowed=True)
+        self.login_decision = RateLimitDecision(allowed=True)
+        self.registration_available = True
+        self.client_addresses: list[str] = []
+        self.permits: list[RegistrationPermitWorkflow] = []
+
+    async def check_registration_attempt(self, client_address: str) -> RateLimitDecision:
+        self.client_addresses.append(client_address)
+        return self.registration_decision
+
+    async def check_login_attempt(self, client_address: str) -> RateLimitDecision:
+        self.client_addresses.append(client_address)
+        return self.login_decision
+
+    async def reserve_registration(self, client_address: str) -> RegistrationPermit | None:
+        if not self.registration_available:
+            return None
+        permit = RegistrationPermitWorkflow()
+        self.permits.append(permit)
+        return permit
+
+
+class UnavailableAuthProtectionWorkflow(AuthProtectionWorkflow):
+    async def check_login_attempt(self, client_address: str) -> RateLimitDecision:
+        raise app_exc.AuthProtectionUnavailable
+
+
+class ConflictingRegistrationAuthService(SuccessfulAuthService):
+    async def register(self, data) -> AuthTokens:
+        raise app_exc.EmailAlreadyExists
+
+
+def configure_auth_protection(app: FastAPI) -> AuthProtectionWorkflow:
+    protection = AuthProtectionWorkflow()
+    app.dependency_overrides[get_anonymous_auth_protection] = lambda: protection
+    return protection
+
+
 @pytest.mark.asyncio
 async def test_registration_returns_access_token_and_sets_protected_refresh_cookie() -> None:
     app = create_app()
     app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, SuccessfulAuthService())
+    protection = configure_auth_protection(app)
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -197,7 +257,64 @@ async def test_registration_returns_access_token_and_sets_protected_refresh_cook
     assert "SameSite=lax" in set_cookie
     assert "Path=/api/v1/auth" in set_cookie
     assert "Max-Age=2592000" in set_cookie
+    assert protection.permits[0].confirmed is True
     UUID(response.headers["X-Request-ID"])
+
+
+@pytest.mark.asyncio
+async def test_failed_registration_releases_reserved_capacity() -> None:
+    app = create_app()
+    app.dependency_overrides[get_auth_service] = lambda: cast(
+        AuthService,
+        ConflictingRegistrationAuthService(),
+    )
+    protection = configure_auth_protection(app)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "existing@example.com",
+                "password": "correct-password",
+                "first_name": "First",
+                "last_name": "Last",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "email_already_exists"
+    assert protection.permits[0].confirmed is False
+    assert protection.permits[0].released is True
+
+
+@pytest.mark.asyncio
+async def test_registration_capacity_limit_rejects_request_before_service_work() -> None:
+    app = create_app()
+    auth_service = SuccessfulAuthService()
+    app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, auth_service)
+    protection = configure_auth_protection(app)
+    protection.registration_available = False
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": "user@example.com",
+                "password": "correct-password",
+                "first_name": "First",
+                "last_name": "Last",
+            },
+        )
+
+    assert response.status_code == 429
+    assert response.json()["code"] == "registration_limit_exceeded"
+    assert auth_service.register_calls == 0
 
 
 @pytest.mark.asyncio
@@ -315,6 +432,7 @@ async def test_invalid_credentials_return_safe_unauthorized_response(
     app.dependency_overrides[get_auth_service] = lambda: cast(
         AuthService, InvalidCredentialsAuthService()
     )
+    configure_auth_protection(app)
 
     with caplog.at_level("INFO"):
         async with AsyncClient(
@@ -342,12 +460,86 @@ async def test_invalid_credentials_return_safe_unauthorized_response(
 
 
 @pytest.mark.asyncio
+async def test_login_rate_limit_returns_retry_boundary_without_checking_credentials() -> None:
+    app = create_app()
+    auth_service = SuccessfulAuthService()
+    app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, auth_service)
+    protection = configure_auth_protection(app)
+    protection.login_decision = RateLimitDecision(
+        allowed=False,
+        retry_after_seconds=17,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "user@example.com", "password": "correct-password"},
+        )
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "17"
+    assert response.json()["code"] == "rate_limit_exceeded"
+    assert response.json()["context"] == {"retry_after_seconds": 17}
+    assert auth_service.login_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_login_fails_closed_when_auth_protection_is_unavailable() -> None:
+    app = create_app()
+    auth_service = SuccessfulAuthService()
+    app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, auth_service)
+    app.dependency_overrides[get_anonymous_auth_protection] = lambda: (
+        UnavailableAuthProtectionWorkflow()
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "user@example.com", "password": "correct-password"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "auth_protection_unavailable"
+    assert auth_service.login_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_auth_limits_use_address_resolved_through_trusted_proxy() -> None:
+    app = create_app(HTTPConfig(trusted_proxy_networks=("127.0.0.0/8",)))
+    auth_service = InvalidCredentialsAuthService()
+    app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, auth_service)
+    protection = configure_auth_protection(app)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "user@example.com", "password": "wrong-password"},
+            headers={
+                "X-Forwarded-For": "198.51.100.25, 203.0.113.10",
+            },
+        )
+
+    assert response.status_code == 401
+    assert protection.client_addresses == ["203.0.113.10"]
+
+
+@pytest.mark.asyncio
 async def test_request_validation_does_not_echo_password(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     password = " leaked-password "
     app = create_app()
     app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, SuccessfulAuthService())
+    protection = configure_auth_protection(app)
 
     with caplog.at_level("INFO"):
         async with AsyncClient(
@@ -386,6 +578,8 @@ async def test_request_validation_does_not_echo_password(
         }
         for detail in response_details
     )
+    assert protection.permits[0].confirmed is False
+    assert protection.permits[0].released is True
     assert getattr(completion_record, "validation_errors_truncated", None) is False
     assert password not in str(getattr(completion_record, "validation_errors", None))
 

@@ -5,7 +5,9 @@ from presentation.dependencies import (
     RefreshTokenCookieDependency,
     OptionalRefreshTokenDependency,
     RefreshTokenDependency,
+    RegistrationPermitDependency,
     capture_auth_request_metadata,
+    enforce_login_rate_limit,
     require_trusted_auth_origin,
 )
 from presentation.schemas.auth import (
@@ -31,13 +33,19 @@ async def register_user(
     response: Response,
     auth_service: AuthServiceDependency,
     refresh_cookie: RefreshTokenCookieDependency,
+    registration_permit: RegistrationPermitDependency,
 ) -> AccessTokenResponse:
     tokens = await auth_service.register(request.to_dto())
+    await registration_permit.confirm()
     refresh_cookie.set(response, tokens.refresh_token, auth_service.refresh_token_ttl)
     return AccessTokenResponse.from_domain(tokens)
 
 
-@router.post("/login", response_model=AccessTokenResponse)
+@router.post(
+    "/login",
+    response_model=AccessTokenResponse,
+    dependencies=[Depends(enforce_login_rate_limit)],
+)
 async def login(
     request: LoginRequest,
     response: Response,

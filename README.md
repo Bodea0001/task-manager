@@ -345,6 +345,36 @@ TASK_CONFIG_HTTP_CORS_ALLOWED_ORIGINS='["http://localhost:5173"]'
 TASK_CONFIG_HTTP_TRUSTED_HOSTS='["localhost", "127.0.0.1"]'
 ```
 
+Authentication endpoints use Redis/Valkey to enforce short-window limits and
+allow at most three successful registrations per client address by default.
+The defaults can be changed without a schema migration:
+
+```bash
+TASK_CONFIG_AUTH_PROTECTION_REGISTRATION_ATTEMPT_LIMIT=10
+TASK_CONFIG_AUTH_PROTECTION_LOGIN_ATTEMPT_LIMIT=10
+TASK_CONFIG_AUTH_PROTECTION_ATTEMPT_WINDOW_SECONDS=60
+TASK_CONFIG_AUTH_PROTECTION_SUCCESSFUL_REGISTRATION_LIMIT=3
+TASK_CONFIG_AUTH_PROTECTION_REGISTRATION_RESERVATION_TTL_SECONDS=300
+```
+
+The successful-registration counter is shared by all application processes.
+Failed registrations release their temporary reservation, while an unavailable
+key-value store rejects protected authentication requests with a controlled
+`503` response instead of bypassing the limit.
+
+Client-address headers are ignored unless the direct peer belongs to an
+explicitly trusted proxy network. When Nginx connects to Granian over loopback,
+configure only those proxy networks so limits apply to the original client:
+
+```bash
+TASK_CONFIG_HTTP_TRUSTED_PROXY_NETWORKS='["127.0.0.1/32", "::1/128"]'
+```
+
+Do not add public client networks to this setting. The resolver walks
+`X-Forwarded-For` from the trusted application-side proxy and stops at the first
+untrusted hop, preventing client-supplied leftmost values from selecting the
+rate-limit identity.
+
 Refresh cookies are `HttpOnly`, `SameSite=Lax`, host-only, and `Secure` by
 default. Production must use HTTPS. For local development over plain HTTP on a
 host where the browser does not apply its localhost exception, disable only the

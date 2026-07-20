@@ -1,5 +1,7 @@
 from asyncio import gather
-from typing import Annotated
+from collections.abc import AsyncGenerator
+from logging import getLogger
+from typing import Annotated, cast
 
 from fastapi import Depends, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -14,6 +16,8 @@ from services.tasks import TaskService
 from services.users import UserService
 from domain.value_objects.users import User
 from presentation.auth_cookies import RefreshTokenCookie
+from presentation.auth_protection import AnonymousAuthProtection, RegistrationPermit
+from presentation.client_address import TrustedClientAddressResolver
 from presentation.container import ApplicationContainer
 from presentation.health import is_database_ready, is_key_value_store_ready
 from presentation.agent_stream import AgentStreamCoordinator
@@ -29,6 +33,8 @@ _bearer_scheme = HTTPBearer(
     scheme_name="AccessToken",
     description="Task Manager access token.",
 )
+
+logger = getLogger(__name__)
 
 
 def get_application_container(request: Request) -> ApplicationContainer:
@@ -87,6 +93,12 @@ def get_agent_stream_coordinator(
     return container.agent_stream
 
 
+def get_anonymous_auth_protection(
+    container: Annotated[ApplicationContainer, Depends(get_application_container)],
+) -> AnonymousAuthProtection:
+    return container.auth_protection
+
+
 def get_current_request_id(request: Request) -> str:
     """Return the correlation id assigned by request context middleware."""
     return getattr(request.state, "request_id", None) or get_request_id() or "unknown"
@@ -98,6 +110,24 @@ def get_refresh_token_cookie_policy(request: Request) -> RefreshTokenCookie:
     if not isinstance(policy, RefreshTokenCookie):
         raise RuntimeError("Refresh-token cookie policy is not initialized")
     return policy
+
+
+def get_client_address_resolver(request: Request) -> TrustedClientAddressResolver:
+    resolver = getattr(request.app.state, "client_address_resolver", None)
+    if not isinstance(resolver, TrustedClientAddressResolver):
+        raise RuntimeError("Client-address resolver is not initialized")
+    return resolver
+
+
+def get_client_address(
+    request: Request,
+    resolver: Annotated[TrustedClientAddressResolver, Depends(get_client_address_resolver)],
+) -> str:
+    """Resolve the direct client through only explicitly trusted proxies."""
+    try:
+        return resolver.resolve(request)
+    except ValueError:
+        raise app_exc.InvalidClientAddress from None
 
 
 def get_refresh_token(
@@ -127,10 +157,54 @@ def require_trusted_auth_origin(
     cookie.require_trusted_origin(request)
 
 
-async def capture_auth_request_metadata(request: Request) -> None:
-    """Attach the direct peer address within the request's async context."""
-    if request.client is not None:
-        add_request_log_fields(client_ip=request.client.host)
+async def capture_auth_request_metadata(
+    client_address: Annotated[str, Depends(get_client_address)],
+) -> None:
+    """Attach the trusted client address within the request's async context."""
+    add_request_log_fields(client_ip=client_address)
+
+
+async def enforce_login_rate_limit(
+    client_address: Annotated[str, Depends(get_client_address)],
+    protection: Annotated[AnonymousAuthProtection, Depends(get_anonymous_auth_protection)],
+) -> None:
+    """Limit anonymous login attempts before password verification."""
+    decision = await protection.check_login_attempt(client_address)
+    if not decision.allowed:
+        raise app_exc.RequestRateLimitExceeded(
+            retry_after_seconds=cast(int, decision.retry_after_seconds)
+        )
+
+
+async def reserve_registration_permit(
+    client_address: Annotated[str, Depends(get_client_address)],
+    protection: Annotated[AnonymousAuthProtection, Depends(get_anonymous_auth_protection)],
+) -> AsyncGenerator[RegistrationPermit]:
+    """Reserve capacity and release it unless registration confirms success."""
+    decision = await protection.check_registration_attempt(client_address)
+    if not decision.allowed:
+        raise app_exc.RequestRateLimitExceeded(
+            retry_after_seconds=cast(int, decision.retry_after_seconds)
+        )
+
+    permit = await protection.reserve_registration(client_address)
+    if permit is None:
+        raise app_exc.RegistrationLimitExceeded
+
+    try:
+        yield permit
+    finally:
+        try:
+            await permit.release()
+        except app_exc.AuthProtectionUnavailable:
+            logger.warning(
+                "event=registration_permit_release_failed error_type=%s",
+                app_exc.AuthProtectionUnavailable.__name__,
+                extra={
+                    "event": "registration_permit_release_failed",
+                    "error_type": app_exc.AuthProtectionUnavailable.__name__,
+                },
+            )
 
 
 async def get_application_readiness(
@@ -186,6 +260,10 @@ AgentApplicationDependency = Annotated[AgentApplication, Depends(get_agent_appli
 AgentStreamCoordinatorDependency = Annotated[
     AgentStreamCoordinator,
     Depends(get_agent_stream_coordinator),
+]
+RegistrationPermitDependency = Annotated[
+    RegistrationPermit,
+    Depends(reserve_registration_permit),
 ]
 RequestIdDependency = Annotated[str, Depends(get_current_request_id)]
 CurrentUserDependency = Annotated[User, Depends(get_current_user)]

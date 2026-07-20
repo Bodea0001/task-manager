@@ -131,6 +131,12 @@ def _server_environment() -> dict[str, str]:
     environment["TASK_CONFIG_DB_POOL_SIZE"] = "2"
     environment["TASK_CONFIG_DB_MAX_OVERFLOW"] = "0"
     environment["TASK_CONFIG_COORDINATION_KEY_PREFIX"] = f"task-manager:e2e:agent-run:{uuid4().hex}"
+    environment["TASK_CONFIG_AUTH_PROTECTION_KEY_PREFIX"] = (
+        f"task-manager:e2e:auth-protection:{uuid4().hex}"
+    )
+    environment["TASK_CONFIG_AUTH_PROTECTION_REGISTRATION_ATTEMPT_LIMIT"] = "100"
+    environment["TASK_CONFIG_AUTH_PROTECTION_LOGIN_ATTEMPT_LIMIT"] = "100"
+    environment["TASK_CONFIG_AUTH_PROTECTION_SUCCESSFUL_REGISTRATION_LIMIT"] = "100"
     for name in tuple(environment):
         if name.startswith("LANGFUSE_"):
             del environment[name]

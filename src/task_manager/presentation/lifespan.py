@@ -14,6 +14,7 @@ from services.tags import TagService
 from services.tasks import TaskService
 from services.users import UserService
 from adapters.agent_run_locks import RedisAgentRunLockManager
+from adapters.auth_protection import RedisAnonymousAuthProtection
 from adapters.key_value_store import create_key_value_store_client
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from db.database import create_database_engine
@@ -114,6 +115,10 @@ async def create_application_container() -> ApplicationContainer:
         task_service = TaskService(uow)
         tag_service = TagService(uow)
         chat_service = ChatService(uow)
+        auth_protection = RedisAnonymousAuthProtection(
+            key_value_store_client,
+            settings.auth_protection,
+        )
         await agent.initialize()
         agent_stream = AgentStreamCoordinator(
             agent=agent,
@@ -159,6 +164,7 @@ async def create_application_container() -> ApplicationContainer:
         chat_service=chat_service,
         agent=agent,
         agent_stream=agent_stream,
+        auth_protection=auth_protection,
         key_value_store_client=key_value_store_client,
     )
 

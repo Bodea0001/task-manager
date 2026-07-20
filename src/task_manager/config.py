@@ -1,4 +1,5 @@
 from pathlib import Path
+from ipaddress import ip_network
 from typing import Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -125,6 +126,19 @@ class CoordinationConfig(BaseModel):
         return self
 
 
+class AuthProtectionConfig(BaseModel):
+    """Abuse-control policy for anonymous authentication requests."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key_prefix: str = Field(default="task-manager:v1:auth-protection", min_length=1)
+    registration_attempt_limit: int = Field(default=10, ge=1)
+    login_attempt_limit: int = Field(default=10, ge=1)
+    attempt_window_seconds: int = Field(default=60, ge=1)
+    successful_registration_limit: int = Field(default=3, ge=1)
+    registration_reservation_ttl_seconds: int = Field(default=300, ge=30)
+
+
 class HTTPConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -132,6 +146,7 @@ class HTTPConfig(BaseModel):
     docs_enabled: bool = True
     cors_allowed_origins: tuple[str, ...] = ()
     trusted_hosts: tuple[str, ...] = ()
+    trusted_proxy_networks: tuple[str, ...] = ()
     refresh_token_cookie_name: str = Field(
         default="task_manager_refresh",
         pattern=r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$",
@@ -163,6 +178,16 @@ class HTTPConfig(BaseModel):
             ):
                 raise ValueError("CORS origins must contain only an HTTP scheme and authority")
         return origins
+
+    @field_validator("trusted_proxy_networks")
+    @classmethod
+    def validate_trusted_proxy_networks(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for network in value:
+            try:
+                ip_network(network, strict=False)
+            except ValueError as exc:
+                raise ValueError("trusted proxy networks must use valid CIDR notation") from exc
+        return value
 
     @property
     def refresh_token_cookie_path(self) -> str:
@@ -217,6 +242,7 @@ class Settings(BaseSettings):
     key_value_store: KeyValueStoreConfig = KeyValueStoreConfig()
     celery: CeleryConfig = CeleryConfig()
     coordination: CoordinationConfig = CoordinationConfig()
+    auth_protection: AuthProtectionConfig = AuthProtectionConfig()
     http: HTTPConfig = HTTPConfig()
 
 

@@ -12,6 +12,7 @@ from services.tasks import TaskService
 from services.users import UserService
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from presentation.agent_stream import AgentStreamCoordinator
+from presentation.auth_protection import AnonymousAuthProtection
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,4 +29,5 @@ class ApplicationContainer:
     chat_service: ChatService
     agent: AgentApplication
     agent_stream: AgentStreamCoordinator
+    auth_protection: AnonymousAuthProtection
     key_value_store_client: Redis

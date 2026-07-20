@@ -61,18 +61,34 @@ class _ErrorDefinition:
     status_code: int
     code: str
     context_fields: tuple[str, ...] = ()
+    header_fields: tuple[tuple[str, str], ...] = ()
 
 
 _ERROR_DEFINITIONS: dict[type[app_exc.BaseAppException], _ErrorDefinition] = {
     app_exc.InvalidCredentials: _ErrorDefinition(401, "invalid_credentials"),
     app_exc.InvalidToken: _ErrorDefinition(401, "invalid_token"),
     app_exc.InvalidRequestOrigin: _ErrorDefinition(403, "invalid_request_origin"),
+    app_exc.InvalidClientAddress: _ErrorDefinition(400, "invalid_client_address"),
+    app_exc.RequestRateLimitExceeded: _ErrorDefinition(
+        429,
+        "rate_limit_exceeded",
+        ("retry_after_seconds",),
+        (("Retry-After", "retry_after_seconds"),),
+    ),
+    app_exc.RegistrationLimitExceeded: _ErrorDefinition(
+        429,
+        "registration_limit_exceeded",
+    ),
     app_exc.EmailAlreadyExists: _ErrorDefinition(409, "email_already_exists"),
     app_exc.TagAlreadyExists: _ErrorDefinition(409, "tag_already_exists"),
     app_exc.AgentRunInProgress: _ErrorDefinition(409, "agent_run_in_progress"),
     app_exc.AgentCoordinationUnavailable: _ErrorDefinition(
         503,
         "agent_coordination_unavailable",
+    ),
+    app_exc.AuthProtectionUnavailable: _ErrorDefinition(
+        503,
+        "auth_protection_unavailable",
     ),
     app_exc.EmailVerificationRequired: _ErrorDefinition(403, "email_verification_required"),
     app_exc.AgentQuotaExhausted: _ErrorDefinition(
@@ -107,12 +123,14 @@ async def application_exception_handler(
         raise exc
     definition = _error_definition(exc)
     headers = {"WWW-Authenticate": "Bearer"} if definition.status_code == 401 else None
+    headers = dict(headers or {})
+    headers.update((header, str(getattr(exc, field))) for header, field in definition.header_fields)
     response = _error_response(
         request,
         status_code=definition.status_code,
         code=definition.code,
         message=str(exc),
-        headers=headers,
+        headers=headers or None,
         context={field: getattr(exc, field) for field in definition.context_fields} or None,
     )
     refresh_cookie = getattr(request.app.state, "refresh_token_cookie", None)
