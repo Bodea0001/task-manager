@@ -24,7 +24,6 @@ describe('authentication', () => {
       if (url.endsWith('/auth/login')) {
         return Promise.resolve(jsonResponse({
           access_token: 'access-token',
-          refresh_token: 'refresh-token',
           token_type: 'bearer',
         }))
       }
@@ -157,7 +156,6 @@ describe('authentication', () => {
       if (url.endsWith('/auth/register')) {
         return Promise.resolve(jsonResponse({
           access_token: 'access-token',
-          refresh_token: 'refresh-token',
           token_type: 'bearer',
         }))
       }
@@ -226,7 +224,6 @@ describe('authentication', () => {
       if (url.endsWith('/auth/login')) {
         return Promise.resolve(jsonResponse({
           access_token: 'access-token',
-          refresh_token: 'refresh-token',
           token_type: 'bearer',
         }))
       }

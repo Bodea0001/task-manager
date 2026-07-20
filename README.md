@@ -176,9 +176,10 @@ Implemented product areas:
 - Tags and context: tag creation, renaming, removal, task tagging, contextual
   lookup, and change history.
 - Users and access: user accounts, authentication, email-verification state,
-  session rotation and logout, profile updates without implicit email changes,
-  and per-user data access. Existing accounts remain verified after migration;
-  newly registered accounts start unverified.
+  refresh-session rotation through a host-only HttpOnly cookie, logout, profile
+  updates without implicit email changes, and per-user data access. Existing
+  accounts remain verified after migration; newly registered accounts start
+  unverified.
 - Chat sessions: titled per-user conversations with paginated, persistent
   user-visible message history and strict ownership boundaries.
 - Assistant agent: natural-language task-management requests, safe service-layer
@@ -343,6 +344,18 @@ When a browser frontend runs on a separate origin, allow it explicitly:
 TASK_CONFIG_HTTP_CORS_ALLOWED_ORIGINS='["http://localhost:5173"]'
 TASK_CONFIG_HTTP_TRUSTED_HOSTS='["localhost", "127.0.0.1"]'
 ```
+
+Refresh cookies are `HttpOnly`, `SameSite=Lax`, host-only, and `Secure` by
+default. Production must use HTTPS. For local development over plain HTTP on a
+host where the browser does not apply its localhost exception, disable only the
+`Secure` attribute:
+
+```bash
+TASK_CONFIG_HTTP_REFRESH_TOKEN_COOKIE_SECURE=false
+```
+
+The frontend origin list is also used by the auth-cookie Origin check. Wildcard
+origins are rejected because credentialed CORS requires explicit origins.
 
 API documentation can be disabled with `TASK_CONFIG_HTTP_DOCS_ENABLED=false`.
 

@@ -1,10 +1,16 @@
 from fastapi import APIRouter, Depends, Response, status
 
-from presentation.dependencies import AuthServiceDependency, capture_auth_request_metadata
+from presentation.dependencies import (
+    AuthServiceDependency,
+    RefreshTokenCookieDependency,
+    OptionalRefreshTokenDependency,
+    RefreshTokenDependency,
+    capture_auth_request_metadata,
+    require_trusted_auth_origin,
+)
 from presentation.schemas.auth import (
-    AuthTokensResponse,
+    AccessTokenResponse,
     LoginRequest,
-    RefreshTokenRequest,
     RegisterUserRequest,
 )
 
@@ -12,41 +18,57 @@ from presentation.schemas.auth import (
 router = APIRouter(
     prefix="/auth",
     tags=["Authentication"],
-    dependencies=[Depends(capture_auth_request_metadata)],
+    dependencies=[
+        Depends(capture_auth_request_metadata),
+        Depends(require_trusted_auth_origin),
+    ],
 )
 
 
-@router.post("/register", response_model=AuthTokensResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=AccessTokenResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(
     request: RegisterUserRequest,
+    response: Response,
     auth_service: AuthServiceDependency,
-) -> AuthTokensResponse:
+    refresh_cookie: RefreshTokenCookieDependency,
+) -> AccessTokenResponse:
     tokens = await auth_service.register(request.to_dto())
-    return AuthTokensResponse.from_domain(tokens)
+    refresh_cookie.set(response, tokens.refresh_token, auth_service.refresh_token_ttl)
+    return AccessTokenResponse.from_domain(tokens)
 
 
-@router.post("/login", response_model=AuthTokensResponse)
+@router.post("/login", response_model=AccessTokenResponse)
 async def login(
     request: LoginRequest,
+    response: Response,
     auth_service: AuthServiceDependency,
-) -> AuthTokensResponse:
+    refresh_cookie: RefreshTokenCookieDependency,
+) -> AccessTokenResponse:
     tokens = await auth_service.login(request.to_dto())
-    return AuthTokensResponse.from_domain(tokens)
+    refresh_cookie.set(response, tokens.refresh_token, auth_service.refresh_token_ttl)
+    return AccessTokenResponse.from_domain(tokens)
 
 
-@router.post("/refresh", response_model=AuthTokensResponse)
+@router.post("/refresh", response_model=AccessTokenResponse)
 async def refresh_tokens(
-    request: RefreshTokenRequest,
+    response: Response,
+    refresh_token: RefreshTokenDependency,
     auth_service: AuthServiceDependency,
-) -> AuthTokensResponse:
-    tokens = await auth_service.refresh(request.refresh_token.get_secret_value())
-    return AuthTokensResponse.from_domain(tokens)
+    refresh_cookie: RefreshTokenCookieDependency,
+) -> AccessTokenResponse:
+    tokens = await auth_service.refresh(refresh_token)
+    refresh_cookie.set(response, tokens.refresh_token, auth_service.refresh_token_ttl)
+    return AccessTokenResponse.from_domain(tokens)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    request: RefreshTokenRequest,
+    refresh_token: OptionalRefreshTokenDependency,
     auth_service: AuthServiceDependency,
+    refresh_cookie: RefreshTokenCookieDependency,
 ) -> Response:
-    await auth_service.revoke_refresh_token(request.refresh_token.get_secret_value())
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    if refresh_token is not None:
+        await auth_service.revoke_refresh_token(refresh_token)
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    refresh_cookie.clear(response)
+    return response

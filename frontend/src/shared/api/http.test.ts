@@ -4,7 +4,7 @@ import { ApiError, apiRequest } from '@/shared/api/http'
 import {
   clearAuthSession,
   hasAuthSession,
-  setAuthTokens,
+  setAccessToken,
 } from '@/shared/auth/session'
 
 afterEach(() => {
@@ -58,9 +58,8 @@ describe('API requests', () => {
   })
 
   it('refreshes an expired session before sending a protected request', async () => {
-    setAuthTokens({
+    setAccessToken({
       access_token: createAccessToken(-60),
-      refresh_token: 'old-refresh-token',
       token_type: 'bearer',
     })
     const nextAccessToken = createAccessToken(3_600)
@@ -70,7 +69,6 @@ describe('API requests', () => {
       if (url.endsWith('/auth/refresh')) {
         return Promise.resolve(jsonResponse({
           access_token: nextAccessToken,
-          refresh_token: 'new-refresh-token',
           token_type: 'bearer',
         }))
       }
@@ -83,18 +81,16 @@ describe('API requests', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/auth/refresh')
-    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
-      JSON.stringify({ refresh_token: 'old-refresh-token' }),
-    )
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined()
+    expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBe('include')
     expect(
       new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Authorization'),
     ).toBe(`Bearer ${nextAccessToken}`)
   })
 
   it('shares one token refresh between concurrent protected requests', async () => {
-    setAuthTokens({
+    setAccessToken({
       access_token: createAccessToken(-60),
-      refresh_token: 'refresh-token',
       token_type: 'bearer',
     })
     let refreshRequests = 0
@@ -104,7 +100,6 @@ describe('API requests', () => {
         refreshRequests += 1
         return Promise.resolve(jsonResponse({
           access_token: createAccessToken(3_600),
-          refresh_token: 'rotated-refresh-token',
           token_type: 'bearer',
         }))
       }
@@ -121,9 +116,8 @@ describe('API requests', () => {
   it('refreshes and retries once after an unexpected unauthorized response', async () => {
     const oldAccessToken = createAccessToken(3_600)
     const nextAccessToken = createAccessToken(7_200)
-    setAuthTokens({
+    setAccessToken({
       access_token: oldAccessToken,
-      refresh_token: 'refresh-token',
       token_type: 'bearer',
     })
     let taskRequests = 0
@@ -132,7 +126,6 @@ describe('API requests', () => {
       if (String(input).endsWith('/auth/refresh')) {
         return Promise.resolve(jsonResponse({
           access_token: nextAccessToken,
-          refresh_token: 'rotated-refresh-token',
           token_type: 'bearer',
         }))
       }
@@ -155,9 +148,8 @@ describe('API requests', () => {
   })
 
   it('clears a session when its refresh token is rejected', async () => {
-    setAuthTokens({
+    setAccessToken({
       access_token: createAccessToken(-60),
-      refresh_token: 'invalid-refresh-token',
       token_type: 'bearer',
     })
     vi.stubGlobal(
@@ -178,9 +170,8 @@ describe('API requests', () => {
   })
 
   it('does not restore a session when logout happens during refresh', async () => {
-    setAuthTokens({
+    setAccessToken({
       access_token: createAccessToken(-60),
-      refresh_token: 'refresh-token',
       token_type: 'bearer',
     })
     let resolveRefresh: (response: Response) => void = () => undefined
@@ -195,7 +186,6 @@ describe('API requests', () => {
     clearAuthSession()
     resolveRefresh(jsonResponse({
       access_token: createAccessToken(3_600),
-      refresh_token: 'rotated-refresh-token',
       token_type: 'bearer',
     }))
 

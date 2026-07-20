@@ -53,11 +53,11 @@ export default defineConfig(({ mode }) => {
       proxy: {
         '/api': {
           target: environment.VITE_DEV_PROXY_TARGET || 'http://localhost:8000',
-          changeOrigin: true,
+          changeOrigin: false,
         },
         '/health': {
           target: environment.VITE_DEV_PROXY_TARGET || 'http://localhost:8000',
-          changeOrigin: true,
+          changeOrigin: false,
         },
       },
     },

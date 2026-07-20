@@ -1,6 +1,6 @@
 import type { User } from '@/entities/user/model'
 import { apiRequest } from '@/shared/api/http'
-import type { AuthTokens } from '@/shared/auth/types'
+import type { AccessToken } from '@/shared/auth/types'
 
 export interface LoginCredentials {
   email: string
@@ -19,7 +19,7 @@ export interface UpdateUserData {
   middle_name?: string | null
 }
 
-export function login(credentials: LoginCredentials): Promise<AuthTokens> {
+export function login(credentials: LoginCredentials): Promise<AccessToken> {
   return apiRequest('/auth/login', {
     auth: 'none',
     method: 'POST',
@@ -27,7 +27,7 @@ export function login(credentials: LoginCredentials): Promise<AuthTokens> {
   })
 }
 
-export function register(data: RegistrationData): Promise<AuthTokens> {
+export function register(data: RegistrationData): Promise<AccessToken> {
   return apiRequest('/auth/register', {
     auth: 'none',
     method: 'POST',
@@ -35,11 +35,10 @@ export function register(data: RegistrationData): Promise<AuthTokens> {
   })
 }
 
-export function logout(refreshToken: string): Promise<void> {
+export function logout(): Promise<void> {
   return apiRequest('/auth/logout', {
     auth: 'none',
     method: 'POST',
-    body: JSON.stringify({ refresh_token: refreshToken }),
   })
 }
 

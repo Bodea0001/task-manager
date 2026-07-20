@@ -53,23 +53,15 @@ class LoginRequest(BaseModel):
         return LoginUser(email=self.email, password=self.password.get_secret_value())
 
 
-class RefreshTokenRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    refresh_token: SecretStr
-
-
-class AuthTokensResponse(BaseModel):
+class AccessTokenResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     access_token: str
-    refresh_token: str
     token_type: str
 
     @classmethod
-    def from_domain(cls, tokens: AuthTokens) -> "AuthTokensResponse":
+    def from_domain(cls, tokens: AuthTokens) -> "AccessTokenResponse":
         return cls(
             access_token=tokens.access_token,
-            refresh_token=tokens.refresh_token,
             token_type=tokens.token_type,
         )

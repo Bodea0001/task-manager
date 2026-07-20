@@ -60,7 +60,7 @@ Users can:
 
 - register with an email address, password, and profile information;
 - sign in and restore an existing session after a page reload;
-- update their first, middle, and last name and email address;
+- update their first, middle, and last name;
 - clear the optional middle name;
 - sign out and revoke the current refresh token.
 
@@ -69,9 +69,17 @@ single coordinated refresh attempt rather than making the user sign in again.
 Concurrent requests and browser tabs are coordinated where the browser supports
 it, reducing the risk of invalidating a rotating refresh token more than once.
 
+The refresh token is stored only in a host-managed `HttpOnly` cookie and is
+never exposed to frontend JavaScript. The access token remains in page memory
+and is not persisted in local storage. Local storage contains only a
+non-sensitive session-presence hint so the application knows whether to ask the
+backend to restore a session after a page reload. Login, refresh, and logout
+requests include browser credentials; application data requests continue to
+use the in-memory access token.
+
 Authentication forms use localized validation while preserving browser password
 generation, storage, and autofill support. Protected workspaces are not shown
-until the stored session has been confirmed by the backend.
+until the cookie-backed session has been confirmed by the backend.
 
 ## Tasks
 

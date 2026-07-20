@@ -17,9 +17,9 @@ export async function apiRequest<T>(
   let response = await sendRequest(path, requestInit, accessToken)
 
   if (auth === 'required' && response.status === 401) {
-    const nextTokens = await refreshAuthTokens(accessToken)
-    if (nextTokens !== undefined) {
-      response = await sendRequest(path, requestInit, nextTokens.access_token)
+    const nextToken = await refreshAuthTokens(accessToken)
+    if (nextToken !== undefined) {
+      response = await sendRequest(path, requestInit, nextToken.access_token)
     }
   }
 
@@ -38,9 +38,9 @@ export async function apiStreamRequest(
   let response = await sendRequest(path, streamInit, accessToken)
 
   if (auth === 'required' && response.status === 401) {
-    const nextTokens = await refreshAuthTokens(accessToken)
-    if (nextTokens !== undefined) {
-      response = await sendRequest(path, streamInit, nextTokens.access_token)
+    const nextToken = await refreshAuthTokens(accessToken)
+    if (nextToken !== undefined) {
+      response = await sendRequest(path, streamInit, nextToken.access_token)
     }
   }
 
@@ -66,6 +66,7 @@ async function sendRequest(
 
   return fetch(`${environment.apiBaseUrl}${path}`, {
     ...init,
+    credentials: init.credentials ?? 'include',
     headers,
   })
 }

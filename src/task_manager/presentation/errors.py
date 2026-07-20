@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import JsonValue
 
 import exceptions as app_exc
+from presentation.auth_cookies import RefreshTokenCookie
 from presentation.request_context import (
     REQUEST_ID_HEADER,
     RequestErrorContext,
@@ -65,6 +66,7 @@ class _ErrorDefinition:
 _ERROR_DEFINITIONS: dict[type[app_exc.BaseAppException], _ErrorDefinition] = {
     app_exc.InvalidCredentials: _ErrorDefinition(401, "invalid_credentials"),
     app_exc.InvalidToken: _ErrorDefinition(401, "invalid_token"),
+    app_exc.InvalidRequestOrigin: _ErrorDefinition(403, "invalid_request_origin"),
     app_exc.EmailAlreadyExists: _ErrorDefinition(409, "email_already_exists"),
     app_exc.TagAlreadyExists: _ErrorDefinition(409, "tag_already_exists"),
     app_exc.AgentRunInProgress: _ErrorDefinition(409, "agent_run_in_progress"),
@@ -105,7 +107,7 @@ async def application_exception_handler(
         raise exc
     definition = _error_definition(exc)
     headers = {"WWW-Authenticate": "Bearer"} if definition.status_code == 401 else None
-    return _error_response(
+    response = _error_response(
         request,
         status_code=definition.status_code,
         code=definition.code,
@@ -113,6 +115,14 @@ async def application_exception_handler(
         headers=headers,
         context={field: getattr(exc, field) for field in definition.context_fields} or None,
     )
+    refresh_cookie = getattr(request.app.state, "refresh_token_cookie", None)
+    if (
+        isinstance(exc, app_exc.InvalidToken)
+        and isinstance(refresh_cookie, RefreshTokenCookie)
+        and refresh_cookie.is_refresh_path(request.url.path)
+    ):
+        refresh_cookie.clear(response)
+    return response
 
 
 async def request_validation_exception_handler(

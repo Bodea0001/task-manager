@@ -1,7 +1,7 @@
 from exceptions.base import BaseAppException
 from exceptions.access import AgentQuotaExhausted, EmailVerificationRequired, Forbidden
 from exceptions.wrong import Wrongness, WrongTaskInterval, TaskScheduleOverlap
-from exceptions.auth import AuthError, InvalidCredentials, InvalidToken
+from exceptions.auth import AuthError, InvalidCredentials, InvalidRequestOrigin, InvalidToken
 from exceptions.unavailable import Unavailable, AgentCoordinationUnavailable
 from exceptions.conflict import (
     Conflict,
@@ -28,6 +28,7 @@ __all__ = [
     "AgentQuotaExhausted",
     "AuthError",
     "InvalidCredentials",
+    "InvalidRequestOrigin",
     "InvalidToken",
     "Unavailable",
     "AgentCoordinationUnavailable",

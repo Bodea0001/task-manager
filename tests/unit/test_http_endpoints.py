@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 from typing import cast
 
@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import exceptions as app_exc
+from config import HTTPConfig
 from services.auth import AuthService
 from services.agent_usage import AgentUsageService
 from services.tags import TagService
@@ -32,6 +33,12 @@ from presentation.middlewares import RequestContextMiddleware, RequestLoggingMid
 
 
 class SuccessfulAuthService:
+    refresh_token_ttl = timedelta(days=30)
+
+    def __init__(self) -> None:
+        self.refreshed_tokens: list[str] = []
+        self.revoked_tokens: list[str] = []
+
     async def register(self, data) -> AuthTokens:
         return AuthTokens(access_token="access-token", refresh_token="refresh-token")
 
@@ -39,10 +46,11 @@ class SuccessfulAuthService:
         return AuthTokens(access_token="access-token", refresh_token="refresh-token")
 
     async def refresh(self, refresh_token: str) -> AuthTokens:
+        self.refreshed_tokens.append(refresh_token)
         return AuthTokens(access_token="new-access-token", refresh_token="new-refresh-token")
 
     async def revoke_refresh_token(self, refresh_token: str) -> None:
-        return None
+        self.revoked_tokens.append(refresh_token)
 
     async def get_current_user(self, access_token: str) -> User:
         raise NotImplementedError
@@ -55,6 +63,7 @@ class InvalidCredentialsAuthService(SuccessfulAuthService):
 
 class AuthenticatedAuthService(SuccessfulAuthService):
     def __init__(self, user: User) -> None:
+        super().__init__()
         self._user = user
 
     async def get_current_user(self, access_token: str) -> User:
@@ -157,16 +166,17 @@ class ConflictingTagService(TagWorkflowService):
 
 
 @pytest.mark.asyncio
-async def test_registration_returns_authentication_tokens() -> None:
+async def test_registration_returns_access_token_and_sets_protected_refresh_cookie() -> None:
     app = create_app()
     app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, SuccessfulAuthService())
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
-        base_url="http://testserver",
+        base_url="https://testserver",
     ) as client:
         response = await client.post(
             "/api/v1/auth/register",
+            headers={"Origin": "https://testserver"},
             json={
                 "email": "user@example.com",
                 "password": "correct-password",
@@ -178,29 +188,123 @@ async def test_registration_returns_authentication_tokens() -> None:
     assert response.status_code == 201
     assert response.json() == {
         "access_token": "access-token",
-        "refresh_token": "refresh-token",
         "token_type": "bearer",
     }
+    set_cookie = response.headers["Set-Cookie"]
+    assert "task_manager_refresh=refresh-token" in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" in set_cookie
+    assert "SameSite=lax" in set_cookie
+    assert "Path=/api/v1/auth" in set_cookie
+    assert "Max-Age=2592000" in set_cookie
     UUID(response.headers["X-Request-ID"])
 
 
 @pytest.mark.asyncio
 async def test_logout_revokes_refresh_session_without_response_content() -> None:
     app = create_app()
+    auth_service = SuccessfulAuthService()
+    app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, auth_service)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set(
+            "task_manager_refresh",
+            "refresh-token",
+            path="/api/v1/auth",
+        )
+        response = await client.post("/api/v1/auth/logout")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert auth_service.revoked_tokens == ["refresh-token"]
+    assert 'task_manager_refresh=""' in response.headers["Set-Cookie"]
+    assert "Max-Age=0" in response.headers["Set-Cookie"]
+    UUID(response.headers["X-Request-ID"])
+
+
+@pytest.mark.asyncio
+async def test_refresh_rotates_cookie_without_accepting_token_in_request_body() -> None:
+    app = create_app()
+    auth_service = SuccessfulAuthService()
+    app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, auth_service)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        client.cookies.set(
+            "task_manager_refresh",
+            "old-refresh-token",
+            path="/api/v1/auth",
+        )
+        response = await client.post("/api/v1/auth/refresh")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "access_token": "new-access-token",
+        "token_type": "bearer",
+    }
+    assert auth_service.refreshed_tokens == ["old-refresh-token"]
+    assert "task_manager_refresh=new-refresh-token" in response.headers["Set-Cookie"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_cookie_returns_unauthorized_and_expires_cookie() -> None:
+    app = create_app()
     app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, SuccessfulAuthService())
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
-        base_url="http://testserver",
+        base_url="https://testserver",
+    ) as client:
+        response = await client.post("/api/v1/auth/refresh")
+
+    assert response.status_code == 401
+    assert response.json()["code"] == "invalid_token"
+    assert 'task_manager_refresh=""' in response.headers["Set-Cookie"]
+
+
+@pytest.mark.asyncio
+async def test_auth_cookie_operations_reject_an_untrusted_browser_origin() -> None:
+    app = create_app()
+    app.dependency_overrides[get_auth_service] = lambda: cast(AuthService, SuccessfulAuthService())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
     ) as client:
         response = await client.post(
-            "/api/v1/auth/logout",
-            json={"refresh_token": "refresh-token"},
+            "/api/v1/auth/login",
+            headers={"Origin": "https://attacker.example"},
+            json={"email": "user@example.com", "password": "correct-password"},
         )
 
-    assert response.status_code == 204
-    assert response.content == b""
-    UUID(response.headers["X-Request-ID"])
+    assert response.status_code == 403
+    assert response.json()["code"] == "invalid_request_origin"
+
+
+@pytest.mark.asyncio
+async def test_credentialed_cors_uses_an_explicit_allowed_origin() -> None:
+    app = create_app(HTTPConfig(cors_allowed_origins=("https://frontend.example",)))
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
+    ) as client:
+        response = await client.options(
+            "/api/v1/auth/refresh",
+            headers={
+                "Origin": "https://frontend.example",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["Access-Control-Allow-Origin"] == "https://frontend.example"
+    assert response.headers["Access-Control-Allow-Credentials"] == "true"
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from services.tags import TagService
 from services.tasks import TaskService
 from services.users import UserService
 from domain.value_objects.users import User
+from presentation.auth_cookies import RefreshTokenCookie
 from presentation.container import ApplicationContainer
 from presentation.health import is_database_ready, is_key_value_store_ready
 from presentation.agent_stream import AgentStreamCoordinator
@@ -91,6 +92,41 @@ def get_current_request_id(request: Request) -> str:
     return getattr(request.state, "request_id", None) or get_request_id() or "unknown"
 
 
+def get_refresh_token_cookie_policy(request: Request) -> RefreshTokenCookie:
+    """Return the refresh-cookie policy initialized with the HTTP app."""
+    policy = getattr(request.app.state, "refresh_token_cookie", None)
+    if not isinstance(policy, RefreshTokenCookie):
+        raise RuntimeError("Refresh-token cookie policy is not initialized")
+    return policy
+
+
+def get_refresh_token(
+    request: Request,
+    cookie: Annotated[RefreshTokenCookie, Depends(get_refresh_token_cookie_policy)],
+) -> str:
+    """Require the browser-managed refresh token for session rotation."""
+    refresh_token = cookie.read(request)
+    if refresh_token is None:
+        raise app_exc.InvalidToken
+    return refresh_token
+
+
+def get_optional_refresh_token(
+    request: Request,
+    cookie: Annotated[RefreshTokenCookie, Depends(get_refresh_token_cookie_policy)],
+) -> str | None:
+    """Return the refresh token when an idempotent logout has one."""
+    return cookie.read(request)
+
+
+def require_trusted_auth_origin(
+    request: Request,
+    cookie: Annotated[RefreshTokenCookie, Depends(get_refresh_token_cookie_policy)],
+) -> None:
+    """Apply the browser Origin policy before auth cookie operations."""
+    cookie.require_trusted_origin(request)
+
+
 async def capture_auth_request_metadata(request: Request) -> None:
     """Attach the direct peer address within the request's async context."""
     if request.client is not None:
@@ -153,3 +189,12 @@ AgentStreamCoordinatorDependency = Annotated[
 ]
 RequestIdDependency = Annotated[str, Depends(get_current_request_id)]
 CurrentUserDependency = Annotated[User, Depends(get_current_user)]
+RefreshTokenCookieDependency = Annotated[
+    RefreshTokenCookie,
+    Depends(get_refresh_token_cookie_policy),
+]
+RefreshTokenDependency = Annotated[str, Depends(get_refresh_token)]
+OptionalRefreshTokenDependency = Annotated[
+    str | None,
+    Depends(get_optional_refresh_token),
+]

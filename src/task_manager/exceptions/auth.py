@@ -15,3 +15,9 @@ class InvalidToken(AuthError):
     def __init__(self):
         message = "Invalid token"
         super().__init__(message)
+
+
+class InvalidRequestOrigin(AuthError):
+    def __init__(self):
+        message = "Request origin is not allowed"
+        super().__init__(message)

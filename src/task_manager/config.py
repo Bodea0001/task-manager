@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -131,6 +132,12 @@ class HTTPConfig(BaseModel):
     docs_enabled: bool = True
     cors_allowed_origins: tuple[str, ...] = ()
     trusted_hosts: tuple[str, ...] = ()
+    refresh_token_cookie_name: str = Field(
+        default="task_manager_refresh",
+        pattern=r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$",
+    )
+    refresh_token_cookie_secure: bool = True
+    refresh_token_cookie_same_site: Literal["lax", "strict"] = "lax"
 
     @field_validator("api_prefix")
     @classmethod
@@ -138,6 +145,28 @@ class HTTPConfig(BaseModel):
         if not value.startswith("/") or value == "/" or value.endswith("/") or "//" in value:
             raise ValueError("api_prefix must be an absolute path without a trailing slash")
         return value
+
+    @field_validator("cors_allowed_origins")
+    @classmethod
+    def validate_cors_allowed_origins(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        origins = tuple(origin.rstrip("/") for origin in value)
+        if "*" in origins:
+            raise ValueError("credentialed CORS requires explicit origins")
+        for origin in origins:
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("CORS origins must contain only an HTTP scheme and authority")
+        return origins
+
+    @property
+    def refresh_token_cookie_path(self) -> str:
+        return f"{self.api_prefix}/auth"
 
 
 class AgentConfig(BaseModel):

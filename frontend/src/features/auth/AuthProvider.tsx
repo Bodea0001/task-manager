@@ -26,10 +26,10 @@ import {
   getAccessToken,
   hasAuthSession,
   revokeAuthSession,
-  setAuthTokens,
+  setAccessToken,
   subscribeToAuthSession,
 } from '@/shared/auth/session'
-import type { AuthTokens } from '@/shared/auth/types'
+import type { AccessToken } from '@/shared/auth/types'
 
 export type AuthStatus =
   | 'anonymous'
@@ -78,11 +78,11 @@ export function AuthProvider(props: ParentProps) {
   }
 
   const authenticate = async (
-    requestTokens: () => Promise<AuthTokens>,
+    requestToken: () => Promise<AccessToken>,
   ): Promise<void> => {
-    const nextTokens = await requestTokens()
+    const nextToken = await requestToken()
     queryClient.clear()
-    setAuthTokens(nextTokens)
+    setAccessToken(nextToken)
     try {
       setUser(await getCurrentUser())
       setStatus('authenticated')
@@ -124,7 +124,9 @@ export function AuthProvider(props: ParentProps) {
       queryClient.clear()
       setUser()
       setStatus('anonymous')
+      return
     }
+    void initialize()
   })
 
   onMount(() => void initialize())

@@ -1,36 +1,37 @@
 import { createApiError } from '@/shared/api/error'
 import { environment } from '@/shared/config/environment'
-import type { AuthSessionEvent, AuthTokens } from '@/shared/auth/types'
+import type { AccessToken, AuthSessionEvent } from '@/shared/auth/types'
 
-const AUTH_SESSION_STORAGE_KEY = 'task-manager.auth-session'
+const AUTH_SESSION_HINT_KEY = 'task-manager.auth-session-present'
+const LEGACY_AUTH_SESSION_STORAGE_KEY = 'task-manager.auth-session'
 const AUTH_REFRESH_LOCK_NAME = 'task-manager.auth-refresh'
 const ACCESS_TOKEN_LEEWAY_SECONDS = 30
 
 type AuthSessionListener = (event: AuthSessionEvent) => void
-type RefreshTokenRevoker = (refreshToken: string) => Promise<void>
+type RefreshTokenRevoker = () => Promise<void>
 
-let tokens = readStoredTokens()
-let refreshInFlight: Promise<AuthTokens> | undefined
+let token: AccessToken | undefined
+let refreshInFlight: Promise<AccessToken> | undefined
+let sessionRevision = 0
 const listeners = new Set<AuthSessionListener>()
 
+removeLegacyStoredTokens()
+
 export function hasAuthSession(): boolean {
-  return tokens !== undefined
+  return token !== undefined || readSessionHint()
 }
 
-export function setAuthTokens(nextTokens: AuthTokens): void {
-  tokens = nextTokens
-  persistTokens(nextTokens)
-  notifyListeners('changed')
+export function setAccessToken(nextToken: AccessToken): void {
+  replaceAccessToken(nextToken)
 }
 
 export function clearAuthSession(): void {
-  const hadSession = tokens !== undefined
-  tokens = undefined
-  removeStoredTokens()
+  const hadSession = token !== undefined || readSessionHint()
+  sessionRevision += 1
+  token = undefined
+  removeSessionHint()
 
-  if (hadSession) {
-    notifyListeners('cleared')
-  }
+  if (hadSession) notifyListeners('cleared')
 }
 
 export function subscribeToAuthSession(listener: AuthSessionListener): () => void {
@@ -53,13 +54,13 @@ export async function revokeAuthSession(
 }
 
 export async function getAccessToken(): Promise<string | undefined> {
-  const currentTokens = tokens
-  if (currentTokens === undefined) {
-    return undefined
-  }
-
-  if (!isAccessTokenExpiring(currentTokens.access_token)) {
-    return currentTokens.access_token
+  const currentToken = token
+  if (currentToken === undefined && !readSessionHint()) return undefined
+  if (
+    currentToken !== undefined &&
+    !isAccessTokenExpiring(currentToken.access_token)
+  ) {
+    return currentToken.access_token
   }
 
   return (await refreshAuthTokens())?.access_token
@@ -67,114 +68,80 @@ export async function getAccessToken(): Promise<string | undefined> {
 
 export async function refreshAuthTokens(
   failedAccessToken?: string,
-): Promise<AuthTokens | undefined> {
+): Promise<AccessToken | undefined> {
   if (
     failedAccessToken !== undefined &&
-    tokens !== undefined &&
-    tokens.access_token !== failedAccessToken
+    token !== undefined &&
+    token.access_token !== failedAccessToken
   ) {
-    return tokens
+    return token
   }
+  if (!hasAuthSession()) return undefined
 
-  if (tokens === undefined) {
-    return undefined
-  }
-
-  refreshInFlight ??= refreshWithCoordination(tokens.refresh_token).finally(() => {
+  refreshInFlight ??= refreshWithCoordination(failedAccessToken).finally(() => {
     refreshInFlight = undefined
   })
   return refreshInFlight
 }
 
-async function refreshWithCoordination(refreshToken: string): Promise<AuthTokens> {
+async function refreshWithCoordination(
+  failedAccessToken?: string,
+): Promise<AccessToken> {
   if (navigator.locks === undefined) {
-    return requestNewTokens(refreshToken)
+    return requestNewAccessToken()
   }
 
-  return navigator.locks.request(AUTH_REFRESH_LOCK_NAME, async () => {
-    const storedTokens = readStoredTokens()
+  return navigator.locks.request(AUTH_REFRESH_LOCK_NAME, () => {
     if (
-      storedTokens !== undefined &&
-      storedTokens.refresh_token !== refreshToken
+      failedAccessToken !== undefined &&
+      token !== undefined &&
+      token.access_token !== failedAccessToken
     ) {
-      tokens = storedTokens
-      notifyListeners('changed')
-      return storedTokens
+      return token
     }
-    return requestNewTokens(refreshToken)
+    return requestNewAccessToken()
   })
 }
 
-async function requestNewTokens(refreshToken: string): Promise<AuthTokens> {
-  const wasPersisted =
-    readStoredTokens()?.refresh_token === refreshToken
+async function requestNewAccessToken(): Promise<AccessToken> {
+  const expectedRevision = sessionRevision
   const response = await fetch(`${environment.apiBaseUrl}/auth/refresh`, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ refresh_token: refreshToken }),
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
   })
 
   if (!response.ok) {
-    const storedTokens = readStoredTokens()
-    if (
-      response.status === 401 &&
-      storedTokens !== undefined &&
-      storedTokens.refresh_token !== refreshToken
-    ) {
-      tokens = storedTokens
-      notifyListeners('changed')
-      return storedTokens
-    }
-
     const error = await createApiError(response)
-    if (response.status === 401 && tokens?.refresh_token === refreshToken) {
+    if (response.status === 401 && expectedRevision === sessionRevision) {
       clearAuthSession()
     }
     throw error
   }
 
-  const nextTokens = (await response.json()) as unknown
-  if (!isAuthTokens(nextTokens)) {
+  const nextToken = (await response.json()) as unknown
+  if (!isAccessToken(nextToken)) {
     throw new Error('The authentication response is invalid')
   }
-
-  const storedTokens = readStoredTokens()
-  if (wasPersisted && storedTokens === undefined) {
-    tokens = undefined
-    notifyListeners('cleared')
-    throw new Error('The authentication session changed during token refresh')
-  }
-  if (
-    storedTokens !== undefined &&
-    storedTokens.refresh_token !== refreshToken
-  ) {
-    tokens = storedTokens
-    notifyListeners('changed')
-    return storedTokens
-  }
-  if (tokens?.refresh_token !== refreshToken) {
-    if (tokens !== undefined) {
-      return tokens
-    }
+  if (expectedRevision !== sessionRevision) {
     throw new Error('The authentication session changed during token refresh')
   }
 
-  setAuthTokens(nextTokens)
-  return nextTokens
+  replaceAccessToken(nextToken)
+  return nextToken
 }
 
 async function revokeCurrentSession(
   revokeRefreshToken: RefreshTokenRevoker,
 ): Promise<void> {
-  const currentTokens = readStoredTokens() ?? tokens
   clearAuthSession()
+  await revokeRefreshToken()
+}
 
-  if (currentTokens !== undefined) {
-    await revokeRefreshToken(currentTokens.refresh_token)
-  }
+function replaceAccessToken(nextToken: AccessToken): void {
+  sessionRevision += 1
+  token = nextToken
+  persistSessionHint()
 }
 
 function isAccessTokenExpiring(accessToken: string): boolean {
@@ -187,9 +154,7 @@ function isAccessTokenExpiring(accessToken: string): boolean {
 
 function readJwtExpiration(accessToken: string): number | undefined {
   const payload = accessToken.split('.')[1]
-  if (payload === undefined) {
-    return undefined
-  }
+  if (payload === undefined) return undefined
 
   try {
     const normalized = payload.replaceAll('-', '+').replaceAll('_', '/')
@@ -201,64 +166,62 @@ function readJwtExpiration(accessToken: string): number | undefined {
   }
 }
 
-function readStoredTokens(): AuthTokens | undefined {
-  try {
-    const value = localStorage.getItem(AUTH_SESSION_STORAGE_KEY)
-    if (value === null) {
-      return undefined
-    }
-    const parsed = JSON.parse(value) as unknown
-    return isAuthTokens(parsed) ? parsed : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function persistTokens(nextTokens: AuthTokens): void {
-  try {
-    localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(nextTokens))
-  } catch {
-    // The session remains available until this page is closed.
-  }
-}
-
-function removeStoredTokens(): void {
-  try {
-    localStorage.removeItem(AUTH_SESSION_STORAGE_KEY)
-  } catch {
-    // An in-memory session can still be cleared without storage access.
-  }
-}
-
-function isAuthTokens(value: unknown): value is AuthTokens {
-  if (typeof value !== 'object' || value === null) {
-    return false
-  }
-  const candidate = value as Partial<AuthTokens>
+function isAccessToken(value: unknown): value is AccessToken {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<AccessToken>
   return (
     typeof candidate.access_token === 'string' &&
     candidate.access_token.length > 0 &&
-    typeof candidate.refresh_token === 'string' &&
-    candidate.refresh_token.length > 0 &&
     typeof candidate.token_type === 'string' &&
     candidate.token_type.toLowerCase() === 'bearer'
   )
 }
 
-function notifyListeners(event: AuthSessionEvent): void {
-  for (const listener of listeners) {
-    listener(event)
+function readSessionHint(): boolean {
+  try {
+    return localStorage.getItem(AUTH_SESSION_HINT_KEY) === '1'
+  } catch {
+    return false
   }
 }
 
+function persistSessionHint(): void {
+  try {
+    localStorage.setItem(AUTH_SESSION_HINT_KEY, '1')
+  } catch {
+    // The access token remains available in memory for this page.
+  }
+}
+
+function removeSessionHint(): void {
+  try {
+    localStorage.removeItem(AUTH_SESSION_HINT_KEY)
+  } catch {
+    // In-memory authentication can still be cleared.
+  }
+}
+
+function removeLegacyStoredTokens(): void {
+  try {
+    localStorage.removeItem(LEGACY_AUTH_SESSION_STORAGE_KEY)
+  } catch {
+    // Legacy browser storage is best-effort cleanup only.
+  }
+}
+
+function notifyListeners(event: AuthSessionEvent): void {
+  for (const listener of listeners) listener(event)
+}
+
 window.addEventListener('storage', (event) => {
-  if (event.key !== AUTH_SESSION_STORAGE_KEY) {
+  if (event.key !== AUTH_SESSION_HINT_KEY) return
+
+  if (event.newValue === '1') {
+    notifyListeners('changed')
     return
   }
 
-  const nextTokens = readStoredTokens()
-  const eventType: AuthSessionEvent =
-    nextTokens === undefined ? 'cleared' : 'changed'
-  tokens = nextTokens
-  notifyListeners(eventType)
+  sessionRevision += 1
+  token = undefined
+  notifyListeners('cleared')
 })

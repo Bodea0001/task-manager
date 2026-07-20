@@ -5,6 +5,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from config import HTTPConfig, settings
+from presentation.auth_cookies import RefreshTokenCookie
 from presentation.errors import register_exception_handlers
 from presentation.lifespan import application_lifespan
 from presentation.middlewares import RequestContextMiddleware, RequestLoggingMiddleware
@@ -32,6 +33,7 @@ def create_app(config: HTTPConfig | None = None) -> FastAPI:
         redoc_url=redoc_url,
         lifespan=application_lifespan,
     )
+    app.state.refresh_token_cookie = RefreshTokenCookie(http_config)
     register_exception_handlers(app)
     for router in unversioned_routers:
         app.include_router(router)
@@ -63,8 +65,9 @@ def _configure_middleware(app: FastAPI, config: HTTPConfig) -> None:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=list(config.cors_allowed_origins),
-            allow_methods=["*"],
-            allow_headers=["*"],
+            allow_credentials=True,
+            allow_methods=["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"],
+            allow_headers=["Accept", "Authorization", "Content-Type"],
         )
 
     if config.trusted_hosts:
