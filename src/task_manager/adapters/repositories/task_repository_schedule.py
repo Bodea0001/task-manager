@@ -200,19 +200,47 @@ class TaskScheduleMixin(TaskRepositoryCommon):
 
     @translate_repository_errors
     async def add_schedule_to_task(self, user_id: UUID, task_id: UUID, schedule: Schedule):
-        await self._upsert_task_schedule(user_id, task_id, schedule)
-
-    async def delete_schedule_from_task(self, user_id: UUID, task_id: UUID):
-        stmt = delete(ScheduledTaskModel).where(
-            ScheduledTaskModel.task_id == task_id,
-            select(1)
-            .select_from(TaskModel)
-            .where(TaskModel.creator_id == user_id, TaskModel.task_id == ScheduledTaskModel.task_id)
-            .where(self._task_is_not_deleted())
-            .exists(),
+        await self._raise_if_schedule_overlaps(user_id, task_id, schedule)
+        values = asdict(schedule)
+        upserted_schedule = (
+            pg_insert(ScheduledTaskModel)
+            .values(task_id=task_id, **values)
+            .on_conflict_do_update(index_elements=["task_id"], set_=values)
+            .returning(ScheduledTaskModel.task_id)
+            .cte("upserted_task_schedule")
+        )
+        customized_instance = self._customize_recurrence_instance(
+            upserted_schedule,
+            cte_name="customized_scheduled_task_recurrence_instance",
+        )
+        await self.session.execute(
+            select(select(1).select_from(upserted_schedule).exists()).add_cte(customized_instance)
         )
 
-        await self.session.execute(stmt)
+    async def delete_schedule_from_task(self, user_id: UUID, task_id: UUID):
+        deleted_schedule = (
+            delete(ScheduledTaskModel)
+            .where(
+                ScheduledTaskModel.task_id == task_id,
+                select(1)
+                .select_from(TaskModel)
+                .where(
+                    TaskModel.creator_id == user_id,
+                    TaskModel.task_id == ScheduledTaskModel.task_id,
+                )
+                .where(self._task_is_not_deleted())
+                .exists(),
+            )
+            .returning(ScheduledTaskModel.task_id)
+            .cte("deleted_task_schedule")
+        )
+        customized_instance = self._customize_recurrence_instance(
+            deleted_schedule,
+            cte_name="customized_unscheduled_task_recurrence_instance",
+        )
+        await self.session.execute(
+            select(select(1).select_from(deleted_schedule).exists()).add_cte(customized_instance)
+        )
 
     async def _upsert_task_schedule(self, user_id: UUID, task_id: UUID, schedule: Schedule | None):
         if not schedule:

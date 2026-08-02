@@ -1286,6 +1286,7 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
             ),
             candidate_occurrence AS MATERIALIZED (
                 SELECT
+                    occurrence.sequence_no,
                     occurrence.planned_date::timestamp + CAST(:default_time AS time)
                         AS starts_at,
                     occurrence.planned_date::timestamp
@@ -1306,6 +1307,17 @@ class TaskRecurrenceMixin(TaskRepositoryCommon):
                     CAST(:repeat_until AS date),
                     CAST(:occurrences_limit AS integer)
                 ) AS occurrence
+                WHERE
+                    CAST(:recurrence_id AS uuid) IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM task_recurrence_instance AS customized_instance
+                        WHERE
+                            customized_instance.series_id = CAST(:recurrence_id AS uuid)
+                            AND customized_instance.sequence_no = occurrence.sequence_no
+                            AND customized_instance.is_customized = true
+                            AND customized_instance.deleted_at IS NULL
+                    )
             ),
             ordered_candidate AS (
                 SELECT

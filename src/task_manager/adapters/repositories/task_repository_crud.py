@@ -1,12 +1,13 @@
 from uuid import UUID
 
-from sqlalchemy import delete, false, func, insert, select
+from sqlalchemy import delete, false, func, insert, literal, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from dto.tasks import AddTask, ListTasksFilters, TaskList, UpdateTaskData
 from models.tags import Tag as TagModel
 from models.tasks import (
     Task as TaskModel,
+    ScheduledTask as ScheduledTaskModel,
     TaskRecurrenceMaterializationConflict as TaskRecurrenceMaterializationConflictModel,
     TaskRecurrenceSeries as TaskRecurrenceSeriesModel,
     TaskRecurrenceTemplate as TaskRecurrenceTemplateModel,
@@ -129,10 +130,57 @@ class TaskCrudMixin(TaskScheduleMixin):
     @translate_repository_errors
     async def update_task(self, user_id: UUID, task_id: UUID, data: UpdateTaskData) -> Task:
         values = self._task_update_values(data)
-
         if values:
-            await self.session.execute(self._update_task_stmt(user_id, task_id, values))
-        await self._upsert_task_schedule(user_id, task_id, data.schedule)
+            changed_task = (
+                self._update_task_stmt(user_id, task_id, values)
+                .returning(TaskModel.task_id)
+                .cte("changed_task")
+            )
+        else:
+            changed_task = (
+                select(TaskModel.task_id)
+                .where(
+                    TaskModel.creator_id == user_id,
+                    TaskModel.task_id == task_id,
+                    self._task_is_not_deleted(),
+                )
+                .cte("changed_task")
+            )
+
+        upserted_schedule = None
+        if data.schedule is not None:
+            await self._raise_if_schedule_overlaps(user_id, task_id, data.schedule)
+            schedule_values = {
+                "starts_at": data.schedule.starts_at,
+                "ends_at": data.schedule.ends_at,
+            }
+            upserted_schedule = (
+                pg_insert(ScheduledTaskModel)
+                .from_select(
+                    (
+                        ScheduledTaskModel.task_id,
+                        ScheduledTaskModel.starts_at,
+                        ScheduledTaskModel.ends_at,
+                    ),
+                    select(
+                        changed_task.c.task_id,
+                        literal(data.schedule.starts_at),
+                        literal(data.schedule.ends_at),
+                    ),
+                )
+                .on_conflict_do_update(index_elements=["task_id"], set_=schedule_values)
+                .returning(ScheduledTaskModel.task_id)
+                .cte("upserted_task_schedule")
+            )
+
+        customized_instance = self._customize_recurrence_instance(
+            upserted_schedule if upserted_schedule is not None else changed_task,
+            cte_name="customized_task_recurrence_instance",
+        )
+        stmt = select(select(1).select_from(changed_task).exists()).add_cte(customized_instance)
+        if upserted_schedule is not None:
+            stmt = stmt.add_cte(upserted_schedule)
+        await self.session.execute(stmt)
         return await self.get_task(user_id, task_id)
 
     async def delete_task(self, user_id: UUID, task_id: UUID) -> None:

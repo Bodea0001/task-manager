@@ -3286,6 +3286,63 @@ async def test_extending_stopped_recurrence_restores_only_matching_instances(
 
 
 @pytest.mark.asyncio
+async def test_rule_update_preserves_occurrence_cancelled_as_a_task(
+    task_service: TaskService,
+) -> None:
+    starts_at = datetime(2099, 12, 20, 8, 0)
+    recurrence = await create_task_recurrence_rule(
+        task_service,
+        TEST_USER_ID,
+        f"{TEST_TITLE_PREFIX}task-cancelled-occurrence",
+        scheduled_recurrence(
+            frequency=RecurrenceFrequency.DAILY,
+            schedule=Schedule(
+                starts_at=starts_at,
+                ends_at=starts_at + timedelta(hours=3),
+            ),
+            occurrences_limit=2,
+        ),
+    )
+    generated_tasks = (
+        await task_service.get_tasks(
+            TEST_USER_ID,
+            ListTasksFilters(search_text=f"{TEST_TITLE_PREFIX}task-cancelled-occurrence"),
+        )
+    ).tasks
+    await task_service.cancel_task(TEST_USER_ID, generated_tasks[0].task_id)
+    await task_service.create_task(
+        TEST_USER_ID,
+        AddTask(
+            title=f"{TEST_TITLE_PREFIX}replacement-for-cancelled-occurrence",
+            due_at=starts_at + timedelta(hours=2),
+            schedule=Schedule(
+                starts_at=starts_at + timedelta(hours=1),
+                ends_at=starts_at + timedelta(hours=2),
+            ),
+        ),
+    )
+
+    await task_service.update_task_recurrence(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        UpdateTaskRecurrence(
+            anchor_date=recurrence.anchor_date,
+            default_time=recurrence.default_time,
+            default_duration=recurrence.default_duration,
+            occurrences_limit=3,
+        ),
+    )
+    occurrences = await task_service.get_task_occurrences(
+        TEST_USER_ID,
+        recurrence.template_id,
+        Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(days=1)),
+    )
+
+    assert len(occurrences) == 1
+    assert occurrences[0].is_cancelled
+
+
+@pytest.mark.asyncio
 async def test_extending_old_recurrence_materializes_current_instances(
     task_service: TaskService,
 ) -> None:

@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 
 import asyncpg
 from sqlalchemy import Row, func, select, update
+from sqlalchemy.sql.selectable import CTE
 from sqlalchemy.orm import defer, selectinload
 from sqlalchemy.exc import IntegrityError, NoResultFound
 
@@ -113,6 +114,19 @@ def translate_repository_errors(
 
 
 class TaskRepositoryCommon(SQLAlchemyRepository):
+    @staticmethod
+    def _customize_recurrence_instance(task_ids: CTE, *, cte_name: str) -> CTE:
+        return (
+            update(TaskRecurrenceInstanceModel)
+            .values(is_customized=True)
+            .where(
+                TaskRecurrenceInstanceModel.task_id.in_(select(task_ids.c.task_id)),
+                TaskRecurrenceInstanceModel.deleted_at.is_(None),
+            )
+            .returning(TaskRecurrenceInstanceModel.instance_id)
+            .cte(cte_name)
+        )
+
     @staticmethod
     def _select_tasks_with_tags():
         return select(TaskModel).options(selectinload(TaskModel.tags))
