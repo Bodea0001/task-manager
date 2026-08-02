@@ -2,15 +2,14 @@ from asyncio import gather
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
 
 from dto.agent_usage import SetAgentAccessData
-from dto.users import RegisterUser
+from dto.users import RegisterUser, VerifyUserEmailData
 from domain.value_objects.agent_usage import AgentAccessLevel
 from exceptions import AgentQuotaExhausted
 from services.agent_usage import AgentUsageService
 from services.auth import AuthService
+from services.users import UserService
 
 
 pytestmark = pytest.mark.integration
@@ -56,6 +55,25 @@ async def test_released_agent_reservation_does_not_consume_allowance(
     allowance = await agent_usage_service.get_allowance(user_id)
     assert allowance.used == 0
     assert allowance.remaining == allowance.limit
+
+
+@pytest.mark.asyncio
+async def test_repeated_reservation_for_same_run_consumes_one_allowance_unit(
+    auth_service: AuthService,
+    agent_usage_service: AgentUsageService,
+) -> None:
+    user_id = await _register_user(auth_service, "quota-idempotency@example.com")
+    run_id = uuid4()
+
+    first = await agent_usage_service.reserve(run_id, user_id)
+    second = await agent_usage_service.reserve(run_id, user_id)
+    await agent_usage_service.consume(run_id, user_id)
+
+    allowance = await agent_usage_service.get_allowance(user_id)
+    assert second == first
+    assert allowance.used == 1
+    assert allowance.limit is not None
+    assert allowance.remaining == allowance.limit - 1
 
 
 @pytest.mark.asyncio
@@ -117,24 +135,17 @@ async def test_returning_to_limited_access_reapplies_existing_lifetime_usage(
 async def test_verification_expands_the_same_lifetime_allowance(
     auth_service: AuthService,
     agent_usage_service: AgentUsageService,
-    test_engine: AsyncEngine,
+    user_service: UserService,
 ) -> None:
-    user_id = await _register_user(auth_service, "quota-verification@example.com")
+    email = "quota-verification@example.com"
+    user_id = await _register_user(auth_service, email)
     before_verification = await agent_usage_service.get_allowance(user_id)
     assert before_verification.limit is not None
     run_id = uuid4()
     await agent_usage_service.reserve(run_id, user_id)
     await agent_usage_service.consume(run_id, user_id)
 
-    async with test_engine.begin() as connection:
-        await connection.execute(
-            text("""
-                UPDATE user_email_verification
-                SET verified_at = CURRENT_TIMESTAMP
-                WHERE user_id = :user_id
-            """),
-            {"user_id": user_id},
-        )
+    await user_service.verify_user_email(VerifyUserEmailData(email))
 
     allowance = await agent_usage_service.get_allowance(user_id)
     assert allowance.limit is not None

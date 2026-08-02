@@ -219,6 +219,8 @@ def _error_definition(exc: app_exc.BaseAppException) -> _ErrorDefinition:
         return _ErrorDefinition(403, "forbidden")
     if isinstance(exc, app_exc.Wrongness):
         return _ErrorDefinition(422, "invalid_operation")
+    if isinstance(exc, app_exc.Unavailable):
+        return _ErrorDefinition(503, "unavailable")
     return _ErrorDefinition(400, "application_error")
 
 

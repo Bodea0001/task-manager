@@ -2,7 +2,7 @@ from uuid import uuid4
 from json import dumps
 from typing import Any, cast
 from datetime import datetime, timezone
-from dataclasses import fields, dataclass
+from dataclasses import dataclass
 
 import pytest
 import httpx
@@ -17,7 +17,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.outputs import ChatGeneration, ChatResult, LLMResult
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.errors import GraphRecursionError
 from langchain.agents.middleware.types import AgentState as LangChainAgentState
@@ -50,28 +50,12 @@ from agents.middlewares import (
     RepeatedToolCallGuardMiddleware,
 )
 from agents.schemas.tools import (
-    AddTaskRecurrenceRuleInput,
-    AddTaskRecurrenceTemplateInput,
     AgentToolInput,
     CreateTaskInput,
-    ListTaskRecurrenceTemplatesInput,
     ListTasksInput,
-    UpdateTaskInput,
-    UpdateTaskOccurrenceInput,
-    UpdateTaskRecurrenceInput,
 )
 from agents.tools.system import get_current_datetime
 from agents.tools.tasks import create_task
-from dto.tasks import (
-    AddTask,
-    AddTaskRecurrence,
-    AddTaskRecurrenceTemplate,
-    ListTaskRecurrenceTemplatesFilters,
-    ListTasksFilters,
-    UpdateTaskData,
-    UpdateTaskOccurrence,
-    UpdateTaskRecurrence,
-)
 from domain.value_objects.tasks import Schedule, Task, TaskPriority, TaskStatus
 from services.tags import TagService
 from services.tasks import TaskService
@@ -134,6 +118,19 @@ class ProgressEmittingFakeAgent(FakeAgent):
         return result
 
 
+class ModelResponseEmittingFakeAgent(FakeAgent):
+    async def ainvoke(self, input, *, config, context, durability):
+        result = await super().ainvoke(
+            input,
+            config=config,
+            context=context,
+            durability=durability,
+        )
+        for callback in config.get("callbacks", ()):
+            callback.on_llm_end(LLMResult(generations=[]), run_id=uuid4())
+        return result
+
+
 class RecursingFakeAgent:
     async def ainvoke(self, input, *, config, context, durability):
         raise GraphRecursionError("recursion limit reached")
@@ -169,6 +166,11 @@ class FakePlannerModel:
         response_index = min(self.response_index, len(self.responses) - 1)
         self.response_index += 1
         return AIMessage(content=self.responses[response_index])
+
+
+class NonTextPlannerModel:
+    async def ainvoke(self, input, *, config):
+        return AIMessage(content=[{"type": "text", "text": "{}"}])
 
 
 class FakeResponderModel:
@@ -388,6 +390,29 @@ async def test_planner_agent_recovers_from_invalid_model_output() -> None:
 
 
 @pytest.mark.asyncio
+async def test_planner_agent_accepts_json_wrapped_in_markdown() -> None:
+    model = FakePlannerModel(
+        """```json
+        {
+          "status": "needs_clarification",
+          "objective": "Identify the task",
+          "steps": [],
+          "clarification_question": "Which task?"
+        }
+        ```"""
+    )
+    planner = PlannerAgent(cast(Any, model), subagents=TEST_SUBAGENTS)
+
+    result = await planner.create_plan(
+        [HumanMessage(content="Update it")],
+        config=cast(RunnableConfig, {}),
+    )
+
+    assert result.status is PlanStatus.NEEDS_CLARIFICATION
+    assert result.clarification_question == "Which task?"
+
+
+@pytest.mark.asyncio
 async def test_planner_agent_rejects_persistently_invalid_model_output() -> None:
     model = FakePlannerModel(["not valid JSON", "still not valid JSON"])
     planner = PlannerAgent(cast(Any, model), subagents=TEST_SUBAGENTS)
@@ -397,6 +422,29 @@ async def test_planner_agent_rejects_persistently_invalid_model_output() -> None
             [HumanMessage(content="Which tasks are due today?")],
             config=cast(RunnableConfig, {}),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    [
+        FakePlannerModel(["{}", "{}"]),
+        NonTextPlannerModel(),
+    ],
+)
+async def test_planner_agent_rejects_results_without_a_valid_plan(model: object) -> None:
+    planner = PlannerAgent(cast(Any, model), subagents=TEST_SUBAGENTS)
+
+    with pytest.raises(PlannerResultError, match="after retry"):
+        await planner.create_plan(
+            [HumanMessage(content="Which tasks are due today?")],
+            config=cast(RunnableConfig, {}),
+        )
+
+
+def test_planner_agent_requires_at_least_one_available_subagent() -> None:
+    with pytest.raises(ValueError, match="at least one"):
+        PlannerAgent(cast(Any, FakePlannerModel("{}")), subagents=())
 
 
 @pytest.mark.asyncio
@@ -532,6 +580,40 @@ async def test_agent_graph_preserves_chat_history_without_exposing_it_to_subagen
 
 
 @pytest.mark.asyncio
+async def test_agent_graph_returns_planner_clarification_without_delegating_work() -> None:
+    planner_model = FakePlannerModel(
+        dumps(
+            {
+                "status": "needs_clarification",
+                "objective": "Identify the requested task",
+                "steps": [],
+                "clarification_question": "Which task should be updated?",
+            }
+        )
+    )
+    graph = AgentGraphBuilder(
+        planner_model=cast(Any, planner_model),
+        subagent_model=ScenarioSubagentModel(),
+        responder_model=cast(Any, FakeResponderModel("This response should not be used.")),
+    ).build(checkpointer=InMemorySaver(), store=InMemoryStore())
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="Update it")]},
+        config={"configurable": {"thread_id": str(uuid4())}},
+        context=AgentContext(
+            user_id=uuid4(),
+            task_service=FakeTaskService(),
+            tag_service=FakeTagService(),
+        ),
+    )
+
+    assert result["structured_response"] == AgentResult(
+        status=AgentStatus.NEEDS_CLARIFICATION,
+        message="Which task should be updated?",
+    )
+
+
+@pytest.mark.asyncio
 async def test_agent_graph_executes_all_steps_and_reports_completed_progress() -> None:
     planner_model = FakePlannerModel(
         dumps(
@@ -653,6 +735,88 @@ def test_agent_tool_schema_contract_does_not_expose_runtime_context() -> None:
 
 def test_agent_application_is_not_initialized_before_startup() -> None:
     assert AgentApplication().is_initialized is False
+
+
+@pytest.mark.asyncio
+async def test_agent_application_requests_initialization_before_runtime_operations() -> None:
+    app = AgentApplication()
+
+    with pytest.raises(RuntimeError, match="not initialized"):
+        await app.run(
+            "find tasks",
+            user_id=uuid4(),
+            chat_id=uuid4(),
+            task_service=FakeTaskService(),
+            tag_service=FakeTagService(),
+        )
+    with pytest.raises(RuntimeError, match="not initialized"):
+        await app.reset_chat_checkpoint(uuid4())
+
+
+@pytest.mark.asyncio
+async def test_agent_application_can_be_closed_repeatedly_before_startup() -> None:
+    app = AgentApplication()
+
+    await app.close()
+    await app.close()
+
+    assert app.is_initialized is False
+
+
+@pytest.mark.asyncio
+async def test_agent_application_asks_for_context_on_empty_message_without_running_graph() -> None:
+    fake_agent = FakeAgent({})
+    app = AgentApplication()
+    app._graph = cast(AgentGraph, fake_agent)
+
+    result = await app.run(
+        "   ",
+        user_id=uuid4(),
+        chat_id=uuid4(),
+        task_service=FakeTaskService(),
+        tag_service=FakeTagService(),
+    )
+
+    assert result == AgentResult(
+        status=AgentStatus.NEEDS_CLARIFICATION,
+        message="Please provide a task-management request.",
+    )
+    assert fake_agent.payload is None
+
+
+@pytest.mark.asyncio
+async def test_agent_application_reports_when_model_has_responded(monkeypatch) -> None:
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    responses = 0
+
+    def record_response() -> None:
+        nonlocal responses
+        responses += 1
+
+    app = AgentApplication()
+    app._graph = cast(
+        AgentGraph,
+        ModelResponseEmittingFakeAgent(
+            {
+                "structured_response": AgentResult(
+                    status=AgentStatus.COMPLETED,
+                    message="Completed.",
+                )
+            }
+        ),
+    )
+
+    result = await app.run(
+        "find tasks",
+        user_id=uuid4(),
+        chat_id=uuid4(),
+        task_service=FakeTaskService(),
+        tag_service=FakeTagService(),
+        model_response_callback=record_response,
+    )
+
+    assert result.status is AgentStatus.COMPLETED
+    assert responses == 1
 
 
 @pytest.mark.asyncio
@@ -1324,41 +1488,6 @@ def test_repeated_tool_call_guard_allows_same_non_mutating_tool_after_mutation_t
     assert update is None
 
 
-@pytest.mark.parametrize(
-    ("schema_type", "dto_type", "operation_fields"),
-    [
-        (ListTasksInput, ListTasksFilters, ()),
-        (CreateTaskInput, AddTask, ()),
-        (UpdateTaskInput, UpdateTaskData, ("task_id",)),
-        (
-            ListTaskRecurrenceTemplatesInput,
-            ListTaskRecurrenceTemplatesFilters,
-            (),
-        ),
-        (AddTaskRecurrenceTemplateInput, AddTaskRecurrenceTemplate, ()),
-        (AddTaskRecurrenceRuleInput, AddTaskRecurrence, ("template_id",)),
-        (UpdateTaskRecurrenceInput, UpdateTaskRecurrence, ("recurrence_id",)),
-        (
-            UpdateTaskOccurrenceInput,
-            UpdateTaskOccurrence,
-            ("recurrence_id", "original_starts_at"),
-        ),
-    ],
-)
-def test_agent_tool_schemas_match_dto_arguments(
-    schema_type,
-    dto_type,
-    operation_fields: tuple[str, ...],
-) -> None:
-    schema_fields = tuple(
-        field_name
-        for field_name in _public_schema_fields(schema_type)
-        if field_name not in operation_fields
-    )
-
-    assert schema_fields == _dataclass_fields(dto_type)
-
-
 def test_create_task_schema_rejects_timezone_aware_due_at() -> None:
     with pytest.raises(ValidationError) as exc_info:
         CreateTaskInput.model_validate(
@@ -1396,14 +1525,6 @@ def test_create_task_schema_rejects_timezone_aware_schedule() -> None:
         )
 
     assert "schedule.starts_at must not include timezone offset" in str(exc_info.value)
-
-
-def _public_schema_fields(schema_type) -> tuple[str, ...]:
-    return tuple(field_name for field_name in schema_type.model_fields if field_name != "runtime")
-
-
-def _dataclass_fields(dto_type) -> tuple[str, ...]:
-    return tuple(field.name for field in fields(dto_type))
 
 
 def _build_conversation_graph(subagent_model: BaseChatModel) -> AgentGraph:

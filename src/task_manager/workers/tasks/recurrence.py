@@ -11,7 +11,10 @@ from config import settings
 from workers.app import celery_app
 from workers.celery_config import RECURRENCE_MATERIALIZATION_TASK_NAME
 from workers.coordination import BackgroundJobCoordinationUnavailable
-from workers.jobs.recurrence_materialization import RecurrenceMaterializationJob
+from workers.jobs.recurrence_materialization import (
+    RECURRENCE_MATERIALIZATION_JOB_NAME,
+    RecurrenceMaterializationJob,
+)
 from workers.runtime import WorkerRuntime
 
 
@@ -54,14 +57,14 @@ def materialize_recurrence_tail(task: Task) -> None:
         logger.warning(
             "event=background_job_retry_scheduled job_name=%s run_id=%s retry=%d "
             "countdown_seconds=%d error_type=%s",
-            "recurrence-materialization",
+            RECURRENCE_MATERIALIZATION_JOB_NAME,
             run_id,
             retry_number,
             countdown,
             type(exc).__name__,
             extra={
                 "event": "background_job_retry_scheduled",
-                "job_name": "recurrence-materialization",
+                "job_name": RECURRENCE_MATERIALIZATION_JOB_NAME,
                 "run_id": run_id,
                 "retry": retry_number,
                 "countdown_seconds": countdown,

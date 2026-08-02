@@ -365,6 +365,110 @@ async def test_recurrence_rule_configuration_round_trips_without_loss(
 
 
 @pytest.mark.asyncio
+async def test_user_can_add_rule_to_existing_recurrence_template(
+    task_service: TaskService,
+) -> None:
+    template = await create_recurrence_template(task_service, title="add-rule")
+    added_rule = await task_service.add_task_recurrence_rule(
+        TEST_USER_ID,
+        template.template_id,
+        AddTaskRecurrence(
+            frequency=RecurrenceFrequency.DAILY,
+            anchor_date=date(2099, 12, 3),
+            default_time=datetime(2099, 12, 3, 15, 30).time(),
+            occurrences_limit=1,
+        ),
+    )
+
+    rules = await task_service.get_task_recurrence_rules(TEST_USER_ID, template.template_id)
+    history = await task_service.get_task_recurrence_template_history(
+        TEST_USER_ID,
+        template.template_id,
+    )
+
+    assert [rule.recurrence_id for rule in rules] == [
+        template.rules[0].recurrence_id,
+        added_rule.recurrence_id,
+    ]
+    assert [event.event_type for event in history] == [
+        AuditEventType.TASK_RECURRENCE_ADDED,
+        AuditEventType.TASK_RECURRENCE_ADDED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_can_recalculate_future_recurrence_instances(
+    task_service: TaskService,
+) -> None:
+    starts_at = datetime(2099, 12, 5, 9, 0)
+    template = await create_recurrence_template(
+        task_service,
+        title="explicit-recalculation",
+        starts_at=starts_at,
+    )
+    recurrence = template.rules[0]
+
+    await task_service.recalculate_future_recurrence_instances(
+        TEST_USER_ID,
+        recurrence.recurrence_id,
+        starts_at,
+    )
+    occurrences = await task_service.get_task_occurrences(
+        TEST_USER_ID,
+        template.template_id,
+        Schedule(starts_at=starts_at, ends_at=starts_at + timedelta(days=1)),
+    )
+    history = await task_service.get_task_recurrence_template_history(
+        TEST_USER_ID,
+        template.template_id,
+    )
+
+    assert len(occurrences) == 1
+    assert occurrences[0].schedule == Schedule(
+        starts_at=starts_at,
+        ends_at=starts_at + timedelta(hours=1),
+    )
+    assert history[-1].event_type is AuditEventType.TASK_RECURRENCE_RECALCULATED
+
+
+@pytest.mark.asyncio
+async def test_recurrence_instance_lookup_distinguishes_ordinary_and_generated_tasks(
+    task_service: TaskService,
+) -> None:
+    ordinary_task = await task_service.create_task(
+        TEST_USER_ID,
+        AddTask(
+            title=f"{TEST_TITLE_PREFIX}ordinary-task-instance-lookup",
+            due_at=datetime(2099, 12, 7, 9, 0),
+        ),
+    )
+    template = await create_recurrence_template(
+        task_service,
+        title="generated-task-instance-lookup",
+        starts_at=datetime(2099, 12, 8, 9, 0),
+    )
+    generated_task = (
+        await task_service.get_tasks(
+            TEST_USER_ID,
+            ListTasksFilters(search_text=template.title),
+        )
+    ).tasks[0]
+
+    ordinary_occurrence = await task_service.get_recurrence_instance_by_task_id(
+        TEST_USER_ID,
+        ordinary_task.task_id,
+    )
+    generated_occurrence = await task_service.get_recurrence_instance_by_task_id(
+        TEST_USER_ID,
+        generated_task.task_id,
+    )
+
+    assert ordinary_occurrence is None
+    assert generated_occurrence is not None
+    assert generated_occurrence.recurrence_id == template.rules[0].recurrence_id
+
+
+@pytest.mark.asyncio
 async def test_deadline_only_recurrence_materializes_tasks_without_schedules(
     task_service: TaskService,
 ) -> None:

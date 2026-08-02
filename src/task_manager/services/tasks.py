@@ -580,11 +580,3 @@ class TaskService:
 
         cls._validate_schedule_windows(schedule_windows)
         return schedule_windows
-
-    @staticmethod
-    def _materialization_windows_for_filters(filters: ListTasksFilters) -> tuple[Schedule, ...]:
-        starts_at = filters.starts_from or filters.ends_from or datetime.now()
-        ends_at = filters.ends_to or filters.starts_to or (starts_at + timedelta(days=365))
-        if ends_at < starts_at:
-            ends_at = starts_at
-        return (Schedule(starts_at=starts_at, ends_at=ends_at),)

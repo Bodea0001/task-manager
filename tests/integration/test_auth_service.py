@@ -3,15 +3,52 @@ from datetime import timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from constants import TEST_USER_ID
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from dto.users import LoginUser, RegisterUser, UpdateUserData
 from dto.users import VerifyUserEmailData
-from exceptions import EmailAlreadyExists, InvalidCredentials, InvalidToken
+from exceptions import (
+    EmailAlreadyExists,
+    EmailVerificationRequired,
+    InvalidCredentials,
+    InvalidToken,
+)
 from services.auth import AuthService
 from services.users import UserService
 
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.asyncio
+async def test_user_can_get_own_profile(user_service: UserService) -> None:
+    user = await user_service.get_user(TEST_USER_ID)
+
+    assert user.user_id == TEST_USER_ID
+    assert user.email_verified is True
+
+
+@pytest.mark.asyncio
+async def test_email_verification_requirement_tracks_account_state(
+    auth_service: AuthService,
+    user_service: UserService,
+) -> None:
+    tokens = await auth_service.register(
+        RegisterUser(
+            email="verification-policy@example.com",
+            password="correct-password",
+            first_name="Verification",
+            last_name="Policy",
+        )
+    )
+    user = await auth_service.get_current_user(tokens.access_token)
+
+    with pytest.raises(EmailVerificationRequired):
+        await user_service.require_email_verified(user.user_id)
+
+    await user_service.verify_user_email(VerifyUserEmailData("verification-policy@example.com"))
+
+    await user_service.require_email_verified(user.user_id)
 
 
 @pytest.mark.asyncio
