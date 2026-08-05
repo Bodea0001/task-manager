@@ -81,6 +81,10 @@ _ERROR_DEFINITIONS: dict[type[app_exc.BaseAppException], _ErrorDefinition] = {
     ),
     app_exc.EmailAlreadyExists: _ErrorDefinition(409, "email_already_exists"),
     app_exc.TagAlreadyExists: _ErrorDefinition(409, "tag_already_exists"),
+    app_exc.AgentRequestNotRetryable: _ErrorDefinition(
+        409,
+        "agent_request_not_retryable",
+    ),
     app_exc.AgentRunInProgress: _ErrorDefinition(409, "agent_run_in_progress"),
     app_exc.AgentCoordinationUnavailable: _ErrorDefinition(
         503,

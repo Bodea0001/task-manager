@@ -13,7 +13,6 @@ from domain.value_objects.chats import (
     Chat,
     ChatMessage,
     ChatMessagePage,
-    ChatMessageRole,
     ChatPage,
 )
 
@@ -54,29 +53,46 @@ class ChatService:
         user_id: UUID,
         chat_id: UUID,
         data: AddChatMessage,
+        response_attempt_id: UUID,
+    ) -> tuple[ChatMessage, UUID | None]:
+        """Append a user message and return any preceding unanswered message."""
+        async with self.uow() as uow:
+            return await uow.chat.add_user_message(
+                user_id,
+                chat_id,
+                data,
+                response_attempt_id,
+            )
+
+    async def retry_last_user_message(
+        self,
+        user_id: UUID,
+        chat_id: UUID,
+        response_attempt_id: UUID,
     ) -> ChatMessage:
-        """Append a user-authored message without accepting a caller-supplied role."""
-        return await self._add_chat_message(user_id, chat_id, ChatMessageRole.USER, data)
+        """Assign a new response attempt to the latest unanswered user message."""
+        async with self.uow() as uow:
+            return await uow.chat.retry_last_user_message(
+                user_id,
+                chat_id,
+                response_attempt_id,
+            )
 
     async def add_assistant_message(
         self,
         user_id: UUID,
         chat_id: UUID,
         data: AddChatMessage,
+        response_attempt_id: UUID,
     ) -> ChatMessage:
-        """Append a trusted assistant response to a user-owned chat."""
-        return await self._add_chat_message(user_id, chat_id, ChatMessageRole.ASSISTANT, data)
-
-    async def _add_chat_message(
-        self,
-        user_id: UUID,
-        chat_id: UUID,
-        role: ChatMessageRole,
-        data: AddChatMessage,
-    ) -> ChatMessage:
+        """Append a response only for the current attempt on the specified chat."""
         async with self.uow() as uow:
-            await self._check_user_can_access_chat(uow, user_id, chat_id)
-            return await uow.chat.add_message(chat_id, role, data)
+            return await uow.chat.add_assistant_message(
+                user_id,
+                chat_id,
+                data,
+                response_attempt_id,
+            )
 
     async def get_chat_messages(
         self,

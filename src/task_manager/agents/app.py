@@ -11,7 +11,7 @@ from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 from openai import APIConnectionError
 from langfuse.langchain import CallbackHandler
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from langchain_core.runnables import RunnableConfig
@@ -90,6 +90,11 @@ class AgentApplication:
         tag_service: TagService,
         plan_progress_callback: AgentPlanProgressCallback | None = None,
         model_response_callback: ModelResponseCallback | None = None,
+        *,
+        agent_run_id: UUID | None = None,
+        message_id: UUID | None = None,
+        preceding_unresolved_message_id: UUID | None = None,
+        is_retry: bool = False,
     ) -> AgentResult:
         """Run one user message in a chat-bound agent session."""
         started_at = perf_counter()
@@ -123,6 +128,10 @@ class AgentApplication:
                 tag_service=tag_service,
                 plan_progress_callback=plan_progress_callback,
                 model_response_callback=model_response_callback,
+                agent_run_id=agent_run_id,
+                message_id=message_id,
+                preceding_unresolved_message_id=preceding_unresolved_message_id,
+                is_retry=is_retry,
             )
             result, reason = self._to_agent_result(graph_result)
             if reason is not None:
@@ -264,9 +273,21 @@ class AgentApplication:
         tag_service: TagService,
         plan_progress_callback: AgentPlanProgressCallback | None = None,
         model_response_callback: ModelResponseCallback | None = None,
+        agent_run_id: UUID | None = None,
+        message_id: UUID | None = None,
+        preceding_unresolved_message_id: UUID | None = None,
+        is_retry: bool = False,
     ) -> dict[str, Any]:
         return await self._get_graph().ainvoke(
-            {"messages": [HumanMessage(content=_message_with_runtime_context(message))]},
+            {
+                "messages": _agent_input_messages(
+                    message,
+                    agent_run_id=agent_run_id,
+                    message_id=message_id,
+                    preceding_unresolved_message_id=preceding_unresolved_message_id,
+                    is_retry=is_retry,
+                )
+            },
             config=self._create_graph_config(
                 chat_id,
                 user_id=user_id,
@@ -389,6 +410,49 @@ def _message_with_runtime_context(message: str) -> str:
         "User request:\n"
         f"{message}"
     )
+
+
+def _agent_input_messages(
+    message: str,
+    agent_run_id: UUID | None,
+    message_id: UUID | None,
+    preceding_unresolved_message_id: UUID | None,
+    is_retry: bool,
+) -> list[BaseMessage]:
+    messages: list[BaseMessage] = []
+    if preceding_unresolved_message_id is not None:
+        messages.append(
+            SystemMessage(
+                id=f"unresolved-agent-request:{preceding_unresolved_message_id}",
+                content=(
+                    "The preceding user request did not reach a confirmed completion. "
+                    "Do not assume it was fulfilled. Some operations may have completed, so "
+                    "verify current state when it matters. Process only the current request "
+                    "unless it explicitly returns to the preceding one."
+                ),
+                additional_kwargs={"lc_source": "agent_run_outcome"},
+            )
+        )
+
+    messages.append(
+        HumanMessage(
+            id=str(message_id) if message_id is not None else None,
+            content=_message_with_runtime_context(message),
+        )
+    )
+    if is_retry:
+        messages.append(
+            SystemMessage(
+                id=f"agent-request-retry:{agent_run_id or message_id}",
+                content=(
+                    "The user explicitly requested another attempt at the unresolved request "
+                    "above. Re-evaluate it against current persisted state before performing "
+                    "changes, and do not assume that earlier attempted operations failed."
+                ),
+                additional_kwargs={"lc_source": "agent_request_retry"},
+            )
+        )
+    return messages
 
 
 def _current_datetime_context() -> str:

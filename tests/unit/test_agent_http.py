@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from json import loads
 from typing import cast
 from uuid import UUID, uuid4
@@ -18,6 +19,8 @@ from services.agent_usage import AgentUsageService
 from services.tags import TagService
 from services.tasks import TaskService
 from domain.value_objects.users import User
+from domain.value_objects.agent_usage import AgentRunReservation
+from domain.value_objects.chats import ChatMessage, ChatMessageRole
 from presentation.agent_stream import AgentStreamCoordinator
 from presentation.app import create_app
 from presentation.dependencies import get_agent_stream_coordinator, get_current_user
@@ -29,6 +32,8 @@ class ChatHistoryWorkflow:
         self.chat_id = chat_id
         self.messages: list[tuple[str, str]] = []
         self.assistant_message_saved = asyncio.Event()
+        self.latest_user_message: ChatMessage | None = None
+        self.response_attempt_id: UUID | None = None
 
     async def check_user_can_use_chat(self, user_id: UUID, chat_id: UUID) -> None:
         if user_id != self.user_id or chat_id != self.chat_id:
@@ -39,17 +44,47 @@ class ChatHistoryWorkflow:
         user_id: UUID,
         chat_id: UUID,
         data: AddChatMessage,
-    ) -> None:
+        response_attempt_id: UUID,
+    ) -> tuple[ChatMessage, UUID | None]:
         await self.check_user_can_use_chat(user_id, chat_id)
+        preceding_unresolved_message_id = None
+        if self.messages and self.messages[-1][0] == "user":
+            assert self.latest_user_message is not None
+            preceding_unresolved_message_id = self.latest_user_message.message_id
+        self.latest_user_message = ChatMessage(
+            message_id=uuid4(),
+            chat_id=chat_id,
+            role=ChatMessageRole.USER,
+            content=data.content,
+            created_at=datetime.now(UTC),
+        )
+        self.response_attempt_id = response_attempt_id
         self.messages.append(("user", data.content))
+        return self.latest_user_message, preceding_unresolved_message_id
+
+    async def retry_last_user_message(
+        self,
+        user_id: UUID,
+        chat_id: UUID,
+        response_attempt_id: UUID,
+    ) -> ChatMessage:
+        await self.check_user_can_use_chat(user_id, chat_id)
+        if self.latest_user_message is None or not self.messages or self.messages[-1][0] != "user":
+            raise app_exc.AgentRequestNotRetryable
+        self.response_attempt_id = response_attempt_id
+        return self.latest_user_message
 
     async def add_assistant_message(
         self,
         user_id: UUID,
         chat_id: UUID,
         data: AddChatMessage,
+        response_attempt_id: UUID,
     ) -> None:
         await self.check_user_can_use_chat(user_id, chat_id)
+        if response_attempt_id != self.response_attempt_id:
+            raise app_exc.ChatNotFound
+        self.response_attempt_id = None
         self.messages.append(("assistant", data.content))
         self.assistant_message_saved.set()
 
@@ -81,6 +116,7 @@ class AgentWorkflow:
         tag_service: TagService,
         plan_progress_callback: AgentPlanProgressCallback | None = None,
         model_response_callback: ModelResponseCallback | None = None,
+        **kwargs: object,
     ) -> AgentResult:
         if plan_progress_callback is not None:
             await plan_progress_callback(
@@ -120,6 +156,7 @@ class BlockingAgentWorkflow(AgentWorkflow):
         tag_service: TagService,
         plan_progress_callback: AgentPlanProgressCallback | None = None,
         model_response_callback: ModelResponseCallback | None = None,
+        **kwargs: object,
     ) -> AgentResult:
         self.started.set()
         await self.release.wait()
@@ -140,8 +177,14 @@ class AgentUsageWorkflow:
         self.consumed: set[UUID] = set()
         self.released: set[UUID] = set()
 
-    async def reserve(self, run_id: UUID, user_id: UUID) -> None:
+    async def create_reservation(self, user_id: UUID) -> AgentRunReservation:
+        run_id = uuid4()
         self.reserved.add(run_id)
+        return AgentRunReservation(
+            run_id=run_id,
+            user_id=user_id,
+            expires_at=datetime.now(UTC),
+        )
 
     async def consume(self, run_id: UUID, user_id: UUID) -> None:
         self.consumed.add(run_id)
@@ -154,7 +197,7 @@ class ExhaustedAgentUsageWorkflow(AgentUsageWorkflow):
     used = 2
     limit = 2
 
-    async def reserve(self, run_id: UUID, user_id: UUID) -> None:
+    async def create_reservation(self, user_id: UUID) -> AgentRunReservation:
         raise app_exc.AgentQuotaExhausted(used=self.used, limit=self.limit)
 
 
@@ -388,6 +431,59 @@ async def test_agent_endpoint_streams_safe_error_after_execution_failure() -> No
     )
     assert "sensitive internal detail" not in response.text
     assert history.messages == [("user", "Show my tasks.")]
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_endpoint_retries_failed_request_without_duplicate_user_message() -> None:
+    user = _authenticated_user()
+    chat_id = uuid4()
+    history = ChatHistoryWorkflow(user.user_id, chat_id)
+    usage = AgentUsageWorkflow()
+    agent = AgentWorkflow(error=RuntimeError("temporary failure"))
+    coordinator = _create_coordinator(agent, history, usage=usage)
+    app = _create_agent_app(user, coordinator)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        failed_response = await client.post(
+            f"/api/v1/chats/{chat_id}/agent",
+            json={"message": "Show my tasks."},
+        )
+        agent.error = None
+        retried_response = await client.post(f"/api/v1/chats/{chat_id}/agent/retry")
+
+    assert _parse_sse(failed_response.text)[-1][0] == "error"
+    assert _parse_sse(retried_response.text)[-1][0] == "result"
+    assert history.messages == [
+        ("user", "Show my tasks."),
+        ("assistant", "You have one task today."),
+    ]
+    assert len(usage.reserved) == 2
+    await coordinator.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_retry_rejects_chat_without_unresolved_request() -> None:
+    user = _authenticated_user()
+    chat_id = uuid4()
+    history = ChatHistoryWorkflow(user.user_id, chat_id)
+    usage = AgentUsageWorkflow()
+    coordinator = _create_coordinator(AgentWorkflow(), history, usage=usage)
+    app = _create_agent_app(user, coordinator)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(f"/api/v1/chats/{chat_id}/agent/retry")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "agent_request_not_retryable"
+    assert usage.released == usage.reserved
+    assert history.messages == []
     await coordinator.close()
 
 

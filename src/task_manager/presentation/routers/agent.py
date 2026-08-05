@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterable
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -39,8 +40,37 @@ async def run_agent(
         chat_id=chat_id,
         request_id=request_id,
     )
+    return _streaming_response(stream.events())
+
+
+@router.post(
+    "/{chat_id}/agent/retry",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "Retried agent plan progress and final result event stream.",
+            "content": {AGENT_STREAM_MEDIA_TYPE: {}},
+        }
+    },
+)
+async def retry_agent(
+    chat_id: UUID,
+    current_user: CurrentUserDependency,
+    coordinator: AgentStreamCoordinatorDependency,
+    request_id: RequestIdDependency,
+) -> StreamingResponse:
+    """Retry the latest unresolved request without accepting duplicate message text."""
+    stream = await coordinator.retry(
+        user_id=current_user.user_id,
+        chat_id=chat_id,
+        request_id=request_id,
+    )
+    return _streaming_response(stream.events())
+
+
+def _streaming_response(events: AsyncIterable[str]) -> StreamingResponse:
     return StreamingResponse(
-        stream.events(),
+        events,
         media_type=AGENT_STREAM_MEDIA_TYPE,
         headers={
             "Cache-Control": "no-cache",

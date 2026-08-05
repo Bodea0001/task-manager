@@ -13,7 +13,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from logging import getLogger
 from typing import Literal
-from uuid import UUID, uuid7
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -23,6 +23,7 @@ from agents.progress import AgentPlanProgressCallback, AgentPlanProgressEvent
 from agents.run_locks import AgentRunLease, AgentRunLockManager
 from agents.schemas.result import AgentResult
 from dto.chats import AddChatMessage
+from domain.value_objects.chats import ChatMessage
 from services.chats import ChatService
 from services.agent_usage import AgentUsageService
 from services.tags import TagService
@@ -64,6 +65,13 @@ class _AgentStreamEvent:
 
     def encode(self) -> str:
         return f"event: {self.name}\ndata: {self.payload.model_dump_json()}\n\n"
+
+
+@dataclass(frozen=True, slots=True)
+class _AgentInvocation:
+    message: ChatMessage
+    preceding_unresolved_message_id: UUID | None = None
+    is_retry: bool = False
 
 
 class _AgentEventChannel:
@@ -142,45 +150,78 @@ class AgentStreamCoordinator:
 
     async def start(
         self,
-        *,
         message: str,
         user_id: UUID,
         chat_id: UUID,
         request_id: str,
     ) -> AgentEventStream:
         """Validate and persist a request before starting its event stream."""
+        return await self._start(
+            message=message,
+            user_id=user_id,
+            chat_id=chat_id,
+            request_id=request_id,
+            retry=False,
+        )
+
+    async def retry(
+        self,
+        user_id: UUID,
+        chat_id: UUID,
+        request_id: str,
+    ) -> AgentEventStream:
+        """Retry the latest unresolved request without copying its message."""
+        return await self._start(
+            message=None,
+            user_id=user_id,
+            chat_id=chat_id,
+            request_id=request_id,
+            retry=True,
+        )
+
+    async def _start(
+        self,
+        message: str | None,
+        user_id: UUID,
+        chat_id: UUID,
+        request_id: str,
+        retry: bool,
+    ) -> AgentEventStream:
         await self._chat_service.check_user_can_use_chat(user_id, chat_id)
         lease = await self._run_lock_manager.acquire(chat_id)
         if lease is None:
             raise app_exc.AgentRunInProgress
 
-        run_id = uuid7()
+        agent_run_id: UUID | None = None
         usage_reserved = False
         try:
-            await self._agent_usage_service.reserve(run_id, user_id)
+            reservation = await self._agent_usage_service.create_reservation(user_id)
+            agent_run_id = reservation.run_id
             usage_reserved = True
-            await self._chat_service.add_user_message(
-                user_id,
-                chat_id,
-                AddChatMessage(content=message),
+            invocation = await self._prepare_agent_request(
+                agent_run_id=agent_run_id,
+                message=message,
+                user_id=user_id,
+                chat_id=chat_id,
+                retry=retry,
             )
             channel = _AgentEventChannel(self._queue_capacity)
             task = create_task(
                 self._run_agent(
-                    message=message,
+                    invocation=invocation,
                     user_id=user_id,
                     chat_id=chat_id,
                     request_id=request_id,
                     channel=channel,
                     lease=lease,
-                    run_id=run_id,
+                    agent_run_id=agent_run_id,
                 ),
                 name=f"agent-run-{chat_id}",
             )
         except BaseException:
             try:
-                if usage_reserved:
-                    await self._agent_usage_service.release(run_id, user_id)
+                if usage_reserved and agent_run_id is not None:
+                    await self._agent_usage_service.release(agent_run_id, user_id)
             finally:
                 await self._release_lease(lease, chat_id=chat_id, request_id=request_id)
             raise
@@ -200,13 +241,13 @@ class AgentStreamCoordinator:
     async def _run_agent(
         self,
         *,
-        message: str,
+        invocation: _AgentInvocation,
         user_id: UUID,
         chat_id: UUID,
         request_id: str,
         channel: _AgentEventChannel,
         lease: AgentRunLease,
-        run_id: UUID,
+        agent_run_id: UUID,
     ) -> None:
         model_response = _ModelResponseTracker()
         usage_finalized = False
@@ -224,12 +265,13 @@ class AgentStreamCoordinator:
             if usage_finalized:
                 return
             usage_finalized = True
-            await self._finalize_usage(run_id, user_id, consume=model_response.received)
+            await self._finalize_usage(agent_run_id, user_id, consume=model_response.received)
 
         try:
             result = await self._invoke_agent_with_lease(
                 lease,
-                message=message,
+                invocation=invocation,
+                agent_run_id=agent_run_id,
                 user_id=user_id,
                 chat_id=chat_id,
                 plan_progress_callback=publish_plan,
@@ -240,6 +282,7 @@ class AgentStreamCoordinator:
                 user_id,
                 chat_id,
                 AddChatMessage(content=result.message),
+                response_attempt_id=agent_run_id,
             )
             channel.publish(
                 _AgentStreamEvent(
@@ -323,7 +366,8 @@ class AgentStreamCoordinator:
         self,
         lease: AgentRunLease,
         *,
-        message: str,
+        invocation: _AgentInvocation,
+        agent_run_id: UUID,
         user_id: UUID,
         chat_id: UUID,
         plan_progress_callback: AgentPlanProgressCallback,
@@ -331,13 +375,17 @@ class AgentStreamCoordinator:
     ) -> AgentResult:
         agent_task = create_task(
             self._agent.run(
-                message,
+                invocation.message.content,
                 user_id,
                 chat_id,
                 self._task_service,
                 self._tag_service,
                 plan_progress_callback=plan_progress_callback,
                 model_response_callback=model_response_callback,
+                agent_run_id=agent_run_id,
+                message_id=invocation.message.message_id,
+                preceding_unresolved_message_id=invocation.preceding_unresolved_message_id,
+                is_retry=invocation.is_retry,
             )
         )
         renewal_task = create_task(self._renew_lease(lease))
@@ -363,11 +411,50 @@ class AgentStreamCoordinator:
             if not await lease.renew():
                 raise _AgentRunLeaseLost
 
-    async def _finalize_usage(self, run_id: UUID, user_id: UUID, *, consume: bool) -> None:
+    async def _finalize_usage(
+        self,
+        agent_run_id: UUID,
+        user_id: UUID,
+        *,
+        consume: bool,
+    ) -> None:
         if consume:
-            await self._agent_usage_service.consume(run_id, user_id)
+            await self._agent_usage_service.consume(agent_run_id, user_id)
         else:
-            await self._agent_usage_service.release(run_id, user_id)
+            await self._agent_usage_service.release(agent_run_id, user_id)
+
+    async def _prepare_agent_request(
+        self,
+        *,
+        agent_run_id: UUID,
+        message: str | None,
+        user_id: UUID,
+        chat_id: UUID,
+        retry: bool,
+    ) -> _AgentInvocation:
+        if retry:
+            user_message = await self._chat_service.retry_last_user_message(
+                user_id,
+                chat_id,
+                response_attempt_id=agent_run_id,
+            )
+            return _AgentInvocation(
+                message=user_message,
+                preceding_unresolved_message_id=user_message.message_id,
+                is_retry=True,
+            )
+        if message is None:
+            raise ValueError("a new agent request requires message content")
+        user_message, preceding_unresolved_message_id = await self._chat_service.add_user_message(
+            user_id,
+            chat_id,
+            AddChatMessage(content=message),
+            response_attempt_id=agent_run_id,
+        )
+        return _AgentInvocation(
+            message=user_message,
+            preceding_unresolved_message_id=preceding_unresolved_message_id,
+        )
 
     @staticmethod
     async def _release_lease(

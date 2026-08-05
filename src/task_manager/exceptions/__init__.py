@@ -16,6 +16,7 @@ from exceptions.unavailable import (
 )
 from exceptions.conflict import (
     Conflict,
+    AgentRequestNotRetryable,
     AgentRunInProgress,
     EmailAlreadyExists,
     TagAlreadyExists,
@@ -48,6 +49,7 @@ __all__ = [
     "AgentCoordinationUnavailable",
     "AuthProtectionUnavailable",
     "Conflict",
+    "AgentRequestNotRetryable",
     "AgentRunInProgress",
     "EmailAlreadyExists",
     "TagAlreadyExists",

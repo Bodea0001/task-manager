@@ -13,7 +13,7 @@ from dto.chats import (
     UpdateChatData,
 )
 from domain.value_objects.chats import Chat, ChatMessageRole
-from exceptions import ChatNotFound
+from exceptions import AgentRequestNotRetryable, ChatNotFound
 from services.chats import ChatService
 
 
@@ -172,15 +172,18 @@ async def test_user_can_use_own_chat(chat_service: ChatService) -> None:
 @pytest.mark.asyncio
 async def test_user_can_read_chronological_chat_history(chat_service: ChatService) -> None:
     chat = await chat_service.create_chat(TEST_USER_ID)
-    first = await chat_service.add_user_message(
+    response_attempt_id = uuid4()
+    first, preceding = await chat_service.add_user_message(
         TEST_USER_ID,
         chat.chat_id,
         AddChatMessage(content="What is due today?"),
+        response_attempt_id=response_attempt_id,
     )
     second = await chat_service.add_assistant_message(
         TEST_USER_ID,
         chat.chat_id,
         AddChatMessage(content="One task is due today."),
+        response_attempt_id=response_attempt_id,
     )
 
     sut = await chat_service.get_chat_messages(TEST_USER_ID, chat.chat_id)
@@ -196,12 +199,144 @@ async def test_user_can_read_chronological_chat_history(chat_service: ChatServic
     )
 
     assert first.role is ChatMessageRole.USER
+    assert preceding is None
     assert second.role is ChatMessageRole.ASSISTANT
     assert sut.items == (first, second)
     assert newest_page.items == (second,)
     assert newest_page.next_offset == 1
     assert previous_page.items == (first,)
     assert previous_page.next_offset is None
+
+
+@pytest.mark.asyncio
+async def test_user_can_retry_latest_unanswered_request_without_duplicate_message(
+    chat_service: ChatService,
+) -> None:
+    chat = await chat_service.create_chat(TEST_USER_ID)
+    first_run_id = uuid4()
+    first, preceding = await chat_service.add_user_message(
+        TEST_USER_ID,
+        chat.chat_id,
+        AddChatMessage(content="Create a task for tomorrow."),
+        response_attempt_id=first_run_id,
+    )
+
+    unanswered_history = await chat_service.get_chat_messages(TEST_USER_ID, chat.chat_id)
+    retry_run_id = uuid4()
+    retry = await chat_service.retry_last_user_message(
+        TEST_USER_ID,
+        chat.chat_id,
+        response_attempt_id=retry_run_id,
+    )
+
+    assert [message.role for message in unanswered_history.items] == [ChatMessageRole.USER]
+    assert preceding is None
+    assert retry.message_id == first.message_id
+
+    await chat_service.add_assistant_message(
+        TEST_USER_ID,
+        chat.chat_id,
+        AddChatMessage(content="The task was created."),
+        response_attempt_id=retry_run_id,
+    )
+    completed_history = await chat_service.get_chat_messages(TEST_USER_ID, chat.chat_id)
+
+    assert [message.role for message in completed_history.items] == [
+        ChatMessageRole.USER,
+        ChatMessageRole.ASSISTANT,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_new_request_supersedes_retry_and_reports_preceding_failure(
+    chat_service: ChatService,
+) -> None:
+    chat = await chat_service.create_chat(TEST_USER_ID)
+    failed_run_id = uuid4()
+    failed, preceding = await chat_service.add_user_message(
+        TEST_USER_ID,
+        chat.chat_id,
+        AddChatMessage(content="Show tomorrow's tasks."),
+        response_attempt_id=failed_run_id,
+    )
+    current_run_id = uuid4()
+    current, preceding = await chat_service.add_user_message(
+        TEST_USER_ID,
+        chat.chat_id,
+        AddChatMessage(content="Show today's tasks."),
+        response_attempt_id=current_run_id,
+    )
+    history = await chat_service.get_chat_messages(TEST_USER_ID, chat.chat_id)
+
+    assert preceding == failed.message_id
+    assert [message.role for message in history.items] == [
+        ChatMessageRole.USER,
+        ChatMessageRole.USER,
+    ]
+    retry = await chat_service.retry_last_user_message(
+        TEST_USER_ID,
+        chat.chat_id,
+        response_attempt_id=uuid4(),
+    )
+    assert retry.message_id == current.message_id
+
+    with pytest.raises(ChatNotFound):
+        await chat_service.add_assistant_message(
+            TEST_USER_ID,
+            chat.chat_id,
+            AddChatMessage(content="Stale response"),
+            response_attempt_id=failed_run_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_answered_request_cannot_be_retried(chat_service: ChatService) -> None:
+    chat = await chat_service.create_chat(TEST_USER_ID)
+    run_id = uuid4()
+    await chat_service.add_user_message(
+        TEST_USER_ID,
+        chat.chat_id,
+        AddChatMessage(content="Show today's tasks."),
+        response_attempt_id=run_id,
+    )
+    await chat_service.add_assistant_message(
+        TEST_USER_ID,
+        chat.chat_id,
+        AddChatMessage(content="You have no tasks today."),
+        response_attempt_id=run_id,
+    )
+
+    with pytest.raises(AgentRequestNotRetryable):
+        await chat_service.retry_last_user_message(
+            TEST_USER_ID,
+            chat.chat_id,
+            response_attempt_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_user_cannot_finalize_another_users_agent_run(
+    chat_service: ChatService,
+) -> None:
+    chat = await chat_service.create_chat(TEST_OTHER_USER_ID)
+    run_id = uuid4()
+    await chat_service.add_user_message(
+        TEST_OTHER_USER_ID,
+        chat.chat_id,
+        AddChatMessage(content="Private request"),
+        response_attempt_id=run_id,
+    )
+
+    with pytest.raises(ChatNotFound):
+        await chat_service.add_assistant_message(
+            TEST_USER_ID,
+            chat.chat_id,
+            AddChatMessage(content="Leaked response"),
+            response_attempt_id=run_id,
+        )
+
+    history = await chat_service.get_chat_messages(TEST_OTHER_USER_ID, chat.chat_id)
+    assert [message.role for message in history.items] == [ChatMessageRole.USER]
 
 
 @pytest.mark.asyncio
@@ -245,6 +380,7 @@ async def test_user_cannot_access_another_users_chat_history(
             TEST_USER_ID,
             chat.chat_id,
             AddChatMessage(content="Private message"),
+            response_attempt_id=uuid4(),
         )
 
     with pytest.raises(ChatNotFound):
@@ -304,10 +440,11 @@ async def test_deleting_chat_cascades_to_its_messages(
     test_engine: AsyncEngine,
 ) -> None:
     chat = await chat_service.create_chat(TEST_USER_ID)
-    message = await chat_service.add_user_message(
+    message, _ = await chat_service.add_user_message(
         TEST_USER_ID,
         chat.chat_id,
         AddChatMessage(content="Temporary message"),
+        response_attempt_id=uuid4(),
     )
 
     await chat_service.delete_chat(TEST_USER_ID, chat.chat_id)

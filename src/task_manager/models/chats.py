@@ -74,6 +74,10 @@ class ChatMessage(Base):
         comment="Роль автора сообщения",
     )
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="Текст сообщения")
+    response_attempt_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        comment="Идентификатор текущей попытки ответа на сообщение",
+    )
     created_at: Mapped[created_at]
 
     chat: Mapped[Chat] = relationship("Chat", back_populates="messages")
@@ -85,5 +89,11 @@ class ChatMessage(Base):
             "chat_id",
             "created_at",
             "message_id",
+        ),
+        Index(
+            "ix_chat_message_response_attempt_id_unique",
+            "response_attempt_id",
+            unique=True,
+            postgresql_where=response_attempt_id.is_not(None),
         ),
     )

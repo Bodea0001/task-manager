@@ -14,6 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
+    SystemMessage,
     ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
@@ -785,8 +786,7 @@ async def test_agent_application_asks_for_context_on_empty_message_without_runni
 
 
 @pytest.mark.asyncio
-async def test_agent_application_reports_when_model_has_responded(monkeypatch) -> None:
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+async def test_agent_application_reports_when_model_has_responded() -> None:
     responses = 0
 
     def record_response() -> None:
@@ -821,7 +821,6 @@ async def test_agent_application_reports_when_model_has_responded(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_agent_application_passes_trusted_context_and_trace_identity(monkeypatch) -> None:
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.setattr(
         "agents.app._current_datetime_context", lambda: "2026-07-02 12:30:00 +03:00 Thursday"
     )
@@ -856,6 +855,40 @@ async def test_agent_application_passes_trusted_context_and_trace_identity(monke
         task_service=task_service,
         tag_service=tag_service,
     )
+
+
+@pytest.mark.asyncio
+async def test_agent_application_marks_retry_without_copying_user_request() -> None:
+    user_message_id = uuid4()
+    run_id = uuid4()
+    expected = AgentResult(status=AgentStatus.COMPLETED, message="Completed.")
+    fake_agent = FakeAgent({"structured_response": expected})
+    app = AgentApplication()
+    app._graph = cast(AgentGraph, fake_agent)
+
+    result = await app.run(
+        "show my tasks",
+        user_id=uuid4(),
+        chat_id=uuid4(),
+        task_service=FakeTaskService(),
+        tag_service=FakeTagService(),
+        agent_run_id=run_id,
+        message_id=user_message_id,
+        preceding_unresolved_message_id=user_message_id,
+        is_retry=True,
+    )
+
+    assert result == expected
+    assert fake_agent.payload is not None
+    messages = fake_agent.payload["messages"]
+    user_messages = [message for message in messages if isinstance(message, HumanMessage)]
+    system_messages = [message for message in messages if isinstance(message, SystemMessage)]
+    assert len(user_messages) == 1
+    assert user_messages[0].id == str(user_message_id)
+    assert [message.additional_kwargs["lc_source"] for message in system_messages] == [
+        "agent_run_outcome",
+        "agent_request_retry",
+    ]
 
 
 @pytest.mark.asyncio
@@ -899,8 +932,7 @@ async def test_agent_run_end_log_contains_safe_correlation_fields(
 
 
 @pytest.mark.asyncio
-async def test_agent_application_accepts_plan_progress_callback(monkeypatch) -> None:
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+async def test_agent_application_accepts_plan_progress_callback() -> None:
     user_id = uuid4()
     chat_id = uuid4()
     events: list[AgentPlanProgressEvent] = []
@@ -1181,6 +1213,47 @@ async def test_agent_graph_compacts_old_history_and_preserves_current_turn(monke
     assert result["structured_response"].status == AgentStatus.COMPLETED
     assert not any(message.content == "first request" for message in messages)
     assert any(message.content == "current request" for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_agent_retry_keeps_one_checkpoint_copy_of_user_message() -> None:
+    app = AgentApplication()
+    graph = _build_conversation_graph(ScenarioSubagentModel())
+    app._graph = graph
+    chat_id = uuid4()
+    user_id = uuid4()
+    message_id = uuid4()
+    task_service = FakeTaskService()
+    tag_service = FakeTagService()
+
+    await app.run(
+        "show my tasks",
+        user_id,
+        chat_id,
+        task_service,
+        tag_service,
+        agent_run_id=uuid4(),
+        message_id=message_id,
+    )
+    result = await app.run(
+        "show my tasks",
+        user_id,
+        chat_id,
+        task_service,
+        tag_service,
+        agent_run_id=uuid4(),
+        message_id=message_id,
+        preceding_unresolved_message_id=message_id,
+        is_retry=True,
+    )
+    state = await graph.aget_state({"configurable": {"thread_id": str(chat_id)}})
+
+    assert result.status is AgentStatus.COMPLETED
+    matching_messages = [
+        message for message in state.values["messages"] if message.id == str(message_id)
+    ]
+    assert len(matching_messages) == 1
+    assert isinstance(matching_messages[0], HumanMessage)
 
 
 @pytest.mark.asyncio

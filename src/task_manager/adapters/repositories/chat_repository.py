@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, insert, literal, select, true, update
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import aliased
 
@@ -76,19 +76,150 @@ class ChatRepository(SQLAlchemyRepository):
         except NoResultFound:
             raise app_exc.ChatNotFound
 
-    async def add_message(
+    async def add_user_message(
         self,
+        user_id: UUID,
         chat_id: UUID,
-        role: ChatMessageRole,
         data: AddChatMessage,
-    ) -> ChatMessage:
-        stmt = (
-            insert(ChatMessageModel)
-            .values(chat_id=chat_id, role=role, content=data.content)
-            .returning(ChatMessageModel)
+        response_attempt_id: UUID,
+    ) -> tuple[ChatMessage, UUID | None]:
+        owned_chat = (
+            select(ChatModel.chat_id)
+            .where(ChatModel.chat_id == chat_id, ChatModel.creator_id == user_id)
+            .cte("owned_chat")
         )
+        latest_message_id = (
+            select(ChatMessageModel.message_id)
+            .join(owned_chat, owned_chat.c.chat_id == ChatMessageModel.chat_id)
+            .order_by(ChatMessageModel.created_at.desc(), ChatMessageModel.message_id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        preceding_unresolved = (
+            update(ChatMessageModel)
+            .where(
+                ChatMessageModel.message_id == latest_message_id,
+                ChatMessageModel.role == ChatMessageRole.USER,
+            )
+            .values(response_attempt_id=None)
+            .returning(ChatMessageModel.message_id)
+            .cte("preceding_unresolved_message")
+        )
+        inserted_message = (
+            insert(ChatMessageModel)
+            .from_select(
+                ["chat_id", "role", "content", "response_attempt_id"],
+                select(
+                    owned_chat.c.chat_id,
+                    literal(ChatMessageRole.USER, type_=ChatMessageModel.role.type),
+                    literal(data.content),
+                    literal(response_attempt_id),
+                ),
+            )
+            .returning(ChatMessageModel)
+            .cte("inserted_user_message")
+        )
+        message = aliased(ChatMessageModel, inserted_message)
+        stmt = (
+            select(
+                message,
+                preceding_unresolved.c.message_id.label("preceding_unresolved_message_id"),
+            )
+            .select_from(inserted_message)
+            .outerjoin(preceding_unresolved, true())
+        )
+
         result = await self.session.execute(stmt)
-        return self._model_to_chat_message(result.scalar_one())
+        row = result.one_or_none()
+        if row is None:
+            raise app_exc.ChatNotFound
+        return self._model_to_chat_message(row[0]), row[1]
+
+    async def retry_last_user_message(
+        self,
+        user_id: UUID,
+        chat_id: UUID,
+        response_attempt_id: UUID,
+    ) -> ChatMessage:
+        owned_chat = (
+            select(ChatModel.chat_id)
+            .where(ChatModel.chat_id == chat_id, ChatModel.creator_id == user_id)
+            .cte("owned_chat")
+        )
+        latest_message_id = (
+            select(ChatMessageModel.message_id)
+            .join(owned_chat, owned_chat.c.chat_id == ChatMessageModel.chat_id)
+            .order_by(ChatMessageModel.created_at.desc(), ChatMessageModel.message_id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        retried_message = (
+            update(ChatMessageModel)
+            .where(
+                ChatMessageModel.message_id == latest_message_id,
+                ChatMessageModel.role == ChatMessageRole.USER,
+            )
+            .values(response_attempt_id=response_attempt_id)
+            .returning(ChatMessageModel)
+            .cte("retried_user_message")
+        )
+        message = aliased(ChatMessageModel, retried_message)
+        stmt = (
+            select(owned_chat.c.chat_id, message)
+            .select_from(owned_chat)
+            .outerjoin(retried_message, true())
+        )
+
+        result = await self.session.execute(stmt)
+        row = result.one_or_none()
+        if row is None:
+            raise app_exc.ChatNotFound
+        if not isinstance(row[1], ChatMessageModel):
+            raise app_exc.AgentRequestNotRetryable
+        return self._model_to_chat_message(row[1])
+
+    async def add_assistant_message(
+        self,
+        user_id: UUID,
+        chat_id: UUID,
+        data: AddChatMessage,
+        response_attempt_id: UUID,
+    ) -> ChatMessage:
+        claimed_request = (
+            update(ChatMessageModel)
+            .where(
+                ChatMessageModel.chat_id == chat_id,
+                ChatMessageModel.response_attempt_id == response_attempt_id,
+                ChatMessageModel.role == ChatMessageRole.USER,
+                ChatMessageModel.chat_id.in_(
+                    select(ChatModel.chat_id).where(ChatModel.creator_id == user_id)
+                ),
+            )
+            .values(response_attempt_id=None)
+            .returning(ChatMessageModel.chat_id)
+            .cte("claimed_agent_request")
+        )
+        inserted_message = (
+            insert(ChatMessageModel)
+            .from_select(
+                ["chat_id", "role", "content"],
+                select(
+                    claimed_request.c.chat_id,
+                    literal(ChatMessageRole.ASSISTANT, type_=ChatMessageModel.role.type),
+                    literal(data.content),
+                ),
+            )
+            .returning(ChatMessageModel)
+            .cte("inserted_assistant_message")
+        )
+        message = aliased(ChatMessageModel, inserted_message)
+        stmt = select(message)
+
+        result = await self.session.execute(stmt)
+        try:
+            return self._model_to_chat_message(result.scalar_one())
+        except NoResultFound:
+            raise app_exc.ChatNotFound from None
 
     async def get_messages(
         self,
@@ -156,7 +287,9 @@ class ChatRepository(SQLAlchemyRepository):
         )
 
     @staticmethod
-    def _model_to_chat_message(model: ChatMessageModel) -> ChatMessage:
+    def _model_to_chat_message(
+        model: ChatMessageModel,
+    ) -> ChatMessage:
         return ChatMessage(
             message_id=model.message_id,
             chat_id=model.chat_id,

@@ -376,6 +376,60 @@ describe('chat workspace', () => {
     ).toHaveLength(1)
   })
 
+  it('shows an empty newly created conversation instead of previous messages', async () => {
+    const existingChat = createChat()
+    const newChat = {
+      ...createChat(),
+      chat_id: 'new-chat-id',
+      title: 'New chat',
+      created_at: '2026-07-15T10:00:00',
+    }
+    const previousMessage = createMessage(
+      existingChat.chat_id,
+      'user',
+      'Unanswered request from the previous conversation',
+      1,
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        if (isChatListRequest(input)) {
+          return Promise.resolve(
+            jsonResponse({ chats: [existingChat], next_offset: null }),
+          )
+        }
+        if (url.endsWith('/users/me/agent/usage')) {
+          return Promise.resolve(jsonResponse(agentAllowance()))
+        }
+        if (url.includes(`/chats/${existingChat.chat_id}/messages`)) {
+          return Promise.resolve(
+            jsonResponse({ messages: [previousMessage], next_offset: null }),
+          )
+        }
+        if (url === '/api/v1/chats' && init?.method === 'POST') {
+          return Promise.resolve(jsonResponse(newChat, 201))
+        }
+        return Promise.resolve(jsonResponse({ messages: [], next_offset: null }))
+      }),
+    )
+    renderChatWorkspace()
+
+    expect(await screen.findByText(previousMessage.content)).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Try again' }),
+    ).toBeVisible()
+    await fireEvent.click(screen.getByRole('button', { name: 'New conversation' }))
+
+    await waitFor(() =>
+      expect(screen.queryByText(previousMessage.content)).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+    expect(
+      screen.getByText('Ask the assistant about your tasks to begin this conversation.'),
+    ).toBeVisible()
+  })
+
   it('shows agent plan progress and the persisted final response', async () => {
     const chat = createChat()
     let agentCompleted = false
@@ -447,6 +501,69 @@ describe('chat workspace', () => {
     expect(JSON.parse(String(agentCall?.[1]?.body))).toEqual({
       message: 'What is due today?',
     })
+  })
+
+  it('retries the latest unanswered request without duplicating it', async () => {
+    const chat = createChat()
+    const userMessage = createMessage(
+      chat.chat_id,
+      'user',
+      'Show overdue tasks',
+      1,
+    )
+    const assistantMessage = createMessage(
+      chat.chat_id,
+      'assistant',
+      'There are no overdue tasks.',
+      2,
+    )
+    let retryCompleted = false
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (isChatListRequest(input)) {
+        return Promise.resolve(jsonResponse({ chats: [chat], next_offset: null }))
+      }
+      if (url.endsWith('/users/me/agent/usage')) {
+        return Promise.resolve(jsonResponse(agentAllowance()))
+      }
+      if (url.includes(`/chats/${chat.chat_id}/messages`)) {
+        return Promise.resolve(
+          jsonResponse({
+            messages: retryCompleted
+              ? [userMessage, assistantMessage]
+              : [userMessage],
+            next_offset: null,
+          }),
+        )
+      }
+      if (
+        url === `/api/v1/chats/${chat.chat_id}/agent/retry` &&
+        init?.method === 'POST'
+      ) {
+        return Promise.resolve(agentStreamResponse(() => (retryCompleted = true)))
+      }
+      return Promise.resolve(jsonResponse(chat))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderChatWorkspace()
+
+    expect(await screen.findByText(userMessage.content)).toBeVisible()
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByText(assistantMessage.content)).toBeVisible()
+    expect(screen.getAllByText(userMessage.content)).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+    const retryCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input) === `/api/v1/chats/${chat.chat_id}/agent/retry` &&
+        init?.method === 'POST',
+    )
+    expect(retryCall?.[1]?.body).toBeUndefined()
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) => String(input) === `/api/v1/chats/${chat.chat_id}/agent`,
+      ),
+    ).toBe(false)
   })
 
   it('explains an unverified account limit without sending a request', async () => {
@@ -706,6 +823,15 @@ function createMessage(
     role,
     content,
     created_at: `2026-07-15T09:0${index}:00`,
+  }
+}
+
+function agentAllowance() {
+  return {
+    used: 0,
+    access_level: 'limited',
+    limit: 10,
+    remaining: 10,
   }
 }
 

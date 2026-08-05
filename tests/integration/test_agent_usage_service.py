@@ -47,12 +47,12 @@ async def test_released_agent_reservation_does_not_consume_allowance(
     agent_usage_service: AgentUsageService,
 ) -> None:
     user_id = await _register_user(auth_service, "quota-release@example.com")
-    run_id = uuid4()
 
-    await agent_usage_service.reserve(run_id, user_id)
-    await agent_usage_service.release(run_id, user_id)
+    reservation = await agent_usage_service.create_reservation(user_id)
+    await agent_usage_service.release(reservation.run_id, user_id)
 
     allowance = await agent_usage_service.get_allowance(user_id)
+    assert reservation.user_id == user_id
     assert allowance.used == 0
     assert allowance.remaining == allowance.limit
 

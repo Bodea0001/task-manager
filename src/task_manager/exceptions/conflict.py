@@ -21,3 +21,9 @@ class AgentRunInProgress(Conflict):
     def __init__(self):
         message = "An agent request is already running for this chat"
         super().__init__(message)
+
+
+class AgentRequestNotRetryable(Conflict):
+    def __init__(self):
+        message = "The latest agent request is not available for retry"
+        super().__init__(message)

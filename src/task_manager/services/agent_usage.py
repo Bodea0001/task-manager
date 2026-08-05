@@ -1,5 +1,5 @@
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid7
 
 from adapters.unitofwork import SQLAlchemyUnitOfWork
 from config import AgentUsageConfig, settings
@@ -17,6 +17,10 @@ class AgentUsageService:
     ) -> None:
         self.uow = uow
         self.config = config or settings.agent_usage
+
+    async def create_reservation(self, user_id: UUID) -> AgentRunReservation:
+        """Create an application-owned agent attempt and reserve its quota unit."""
+        return await self.reserve(uuid7(), user_id)
 
     async def reserve(self, run_id: UUID, user_id: UUID) -> AgentRunReservation:
         now = datetime.now(UTC)

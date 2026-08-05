@@ -248,6 +248,7 @@ Users can:
 - rename a conversation;
 - delete a conversation and its message history after confirmation;
 - incrementally load older conversations and messages;
+- retry the latest unanswered request without creating a duplicate message;
 - continue the same active conversation from the desktop panel, mobile drawer,
   or dedicated Chat section.
 
@@ -267,6 +268,12 @@ are removed when the authenticated session ends or the tab is closed.
 Connection interruptions, coordination failures, and assistant execution
 errors are presented as user-facing states with support details when available.
 Recoverable input is not discarded.
+
+When the latest user message has no assistant response, the interface marks it
+as unanswered and offers a retry action in place. Empty conversations and
+already answered messages do not show this action. Creating or selecting a
+conversation immediately replaces the previous message view, including when
+moving between the assistant panel and the dedicated Chat section.
 
 ## Settings And Personalization
 

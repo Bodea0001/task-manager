@@ -11,6 +11,7 @@ import LoaderCircle from 'lucide-solid/icons/loader-circle'
 import MessageSquareText from 'lucide-solid/icons/message-square-text'
 import Pencil from 'lucide-solid/icons/pencil'
 import Plus from 'lucide-solid/icons/plus'
+import RotateCcw from 'lucide-solid/icons/rotate-ccw'
 import SendHorizontal from 'lucide-solid/icons/send-horizontal'
 import Trash2 from 'lucide-solid/icons/trash-2'
 import X from 'lucide-solid/icons/x'
@@ -56,7 +57,11 @@ import type { AgentRunAllowance } from '@/entities/user/model'
 import { RECURRENCE_TEMPLATES_QUERY_KEY } from '@/entities/recurrence/api'
 import { TAGS_QUERY_KEY } from '@/entities/tag/api'
 import { invalidateTaskLists } from '@/entities/task/cache'
-import { runAgentStream } from '@/features/chat/agentStream'
+import {
+  retryAgentStream,
+  runAgentStream,
+} from '@/features/chat/agentStream'
+import type { AgentStreamHandlers } from '@/features/chat/agentStream'
 import { useChatDrafts } from '@/features/chat/ChatDraftProvider'
 import { ApiError } from '@/shared/api/http'
 import { useI18n } from '@/shared/i18n/I18nProvider'
@@ -72,7 +77,7 @@ type WorkspaceMode = 'page' | 'panel'
 
 type RunPreview = {
   assistant?: string
-  user: string
+  user?: string
 }
 
 const planStatusKeys: Record<PlanStepStatus, TranslationKey> = {
@@ -101,6 +106,7 @@ export function ChatWorkspace(props: {
   const [plan, setPlan] = createSignal<AgentPlan>()
   const [preview, setPreview] = createSignal<RunPreview>()
   const [streamError, setStreamError] = createSignal<AgentStreamError>()
+  const [retryingMessageId, setRetryingMessageId] = createSignal<string>()
   const [operationError, setOperationError] = createSignal(false)
   const [operationPending, setOperationPending] = createSignal(false)
   const [renaming, setRenaming] = createSignal(false)
@@ -162,10 +168,17 @@ export function ChatWorkspace(props: {
       enabled: chat !== undefined,
     }
   })
-  const messages = createMemo(() => [
-    ...olderMessages(),
-    ...(messagesQuery.data?.messages || []),
-  ])
+  const messages = createMemo(() => {
+    const chatId = selectedChatId()
+    if (chatId === undefined) return []
+    return [
+      ...olderMessages().filter((message) => message.chat_id === chatId),
+      ...(messagesQuery.data?.messages || []).filter(
+        (message) => message.chat_id === chatId,
+      ),
+    ]
+  })
+  const latestMessage = createMemo(() => messages().at(-1))
   const input = () => drafts.getDraft(selectedChatId())
 
   createEffect(() => {
@@ -175,9 +188,14 @@ export function ChatWorkspace(props: {
       if (!chatsQuery.isPending) setSelectedChatId()
       return
     }
+    const active = available.find((chat) => chat.is_active)
+    if (active !== undefined && active.chat_id !== selected) {
+      setSelectedChatId(active.chat_id)
+      return
+    }
     if (selected === undefined || !available.some((chat) => chat.chat_id === selected)) {
       setSelectedChatId(
-        available.find((chat) => chat.is_active)?.chat_id || available[0].chat_id,
+        active?.chat_id || available[0].chat_id,
       )
     }
   })
@@ -189,6 +207,7 @@ export function ChatWorkspace(props: {
       setPlan()
       setPreview()
       setStreamError()
+      setRetryingMessageId()
       setOperationError(false)
       setRenaming(false)
       setConfirmingDelete(false)
@@ -269,23 +288,16 @@ export function ChatWorkspace(props: {
     }
     if (isRunning()) return
     const previous = selectedChatId()
+    const previousChats = queryClient.getQueryData<ChatListResponse>(CHATS_QUERY_KEY)
+    setCachedActiveChat(queryClient, chat)
     setSelectedChatId(chat.chat_id)
     closeConversationList()
     setOperationError(false)
     try {
       const activeChat = await activateChat(chat.chat_id)
-      queryClient.setQueryData<ChatListResponse>(CHATS_QUERY_KEY, (current) => {
-        if (current === undefined) return current
-        return {
-          ...current,
-          chats: current.chats.map((item) =>
-            item.chat_id === activeChat.chat_id
-              ? activeChat
-              : { ...item, is_active: false },
-          ),
-        }
-      })
+      setCachedActiveChat(queryClient, activeChat)
     } catch {
+      queryClient.setQueryData(CHATS_QUERY_KEY, previousChats)
       setSelectedChatId(previous)
       setOperationError(true)
     }
@@ -389,6 +401,7 @@ export function ChatWorkspace(props: {
     setLoadingEarlier(true)
     try {
       const page = await listChatMessages(chatId, MESSAGE_PAGE_SIZE, offset)
+      if (selectedChatId() !== chatId) return
       setOlderMessages((current) => [...page.messages, ...current])
       setNextMessageOffset(page.next_offset)
       queueMicrotask(() => {
@@ -399,32 +412,30 @@ export function ChatWorkspace(props: {
     }
   }
 
-  const submit = async () => {
-    if (chatsQuery.isPending || allowanceQuery.isPending) return
-    const content = input().trim()
-    if (content.length === 0 || isRunning() || isQuotaExhausted()) return
-    const draftChatId = selectedChatId()
-    let chatId = draftChatId
-    if (chatId === undefined) {
-      chatId = (await addChat())?.chat_id
-      if (chatId === undefined) return
-    }
-
+  const executeAgent = async (options: {
+    chatId: string
+    content: string
+    draftChatId?: string
+    retryMessageId?: string
+  }) => {
     setRunning(true)
     setPlan()
     setStreamError()
-    setPreview({ user: content })
+    setRetryingMessageId(options.retryMessageId)
+    setPreview(
+      options.retryMessageId === undefined ? { user: options.content } : undefined,
+    )
     scrollToBottom()
     let resultReceived = false
     let draftCleared = false
     const clearSubmittedDraft = () => {
-      if (draftCleared) return
-      drafts.clearDraft(draftChatId)
-      drafts.clearDraft(chatId)
+      if (draftCleared || options.retryMessageId !== undefined) return
+      drafts.clearDraft(options.draftChatId)
+      drafts.clearDraft(options.chatId)
       draftCleared = true
     }
     try {
-      await runAgentStream(chatId, content, {
+      const handlers: AgentStreamHandlers = {
         onPlan: (nextPlan) => {
           clearSubmittedDraft()
           setPlan(nextPlan)
@@ -433,7 +444,11 @@ export function ChatWorkspace(props: {
         onResult: (result) => {
           clearSubmittedDraft()
           resultReceived = true
-          setPreview({ user: content, assistant: result.message })
+          setPreview({
+            user:
+              options.retryMessageId === undefined ? options.content : undefined,
+            assistant: result.message,
+          })
           scrollToBottom()
         },
         onError: (error) => {
@@ -442,7 +457,12 @@ export function ChatWorkspace(props: {
           setStreamError(error)
           scrollToBottom()
         },
-      })
+      }
+      if (options.retryMessageId === undefined) {
+        await runAgentStream(options.chatId, options.content, handlers)
+      } else {
+        await retryAgentStream(options.chatId, handlers)
+      }
       await messagesQuery.refetch()
       if (resultReceived) {
         await Promise.all([
@@ -459,9 +479,43 @@ export function ChatWorkspace(props: {
       await allowanceQuery.refetch()
       setPreview()
       setPlan()
+      setRetryingMessageId()
       setRunning(false)
       scrollToBottom()
     }
+  }
+
+  const submit = async () => {
+    if (chatsQuery.isPending || allowanceQuery.isPending) return
+    const content = input().trim()
+    if (content.length === 0 || isRunning() || isQuotaExhausted()) return
+    const draftChatId = selectedChatId()
+    let chatId = draftChatId
+    if (chatId === undefined) {
+      chatId = (await addChat())?.chat_id
+      if (chatId === undefined) return
+    }
+    await executeAgent({ chatId, content, draftChatId })
+  }
+
+  const retryLatestRequest = async () => {
+    if (
+      chatsQuery.isPending ||
+      allowanceQuery.isPending ||
+      operationPending() ||
+      isRunning() ||
+      isQuotaExhausted()
+    ) {
+      return
+    }
+    const chatId = selectedChatId()
+    const message = latestMessage()
+    if (chatId === undefined || message?.role !== 'user') return
+    await executeAgent({
+      chatId,
+      content: message.content,
+      retryMessageId: message.message_id,
+    })
   }
 
   const startRenaming = () => {
@@ -724,11 +778,31 @@ export function ChatWorkspace(props: {
               <Show when={messages().length === 0 && preview() === undefined}>
                 <ChatEmpty />
               </Show>
-              <For each={messages()}>{(message) => <ChatMessageView message={message} />}</For>
+              <For each={messages()}>
+                {(message) => (
+                  <ChatMessageView
+                    message={message}
+                    retryable={
+                      message.role === 'user' &&
+                      message.message_id === latestMessage()?.message_id
+                    }
+                    retrying={retryingMessageId() === message.message_id}
+                    retryDisabled={
+                      allowanceQuery.isPending ||
+                      operationPending() ||
+                      isRunning() ||
+                      isQuotaExhausted()
+                    }
+                    onRetry={() => void retryLatestRequest()}
+                  />
+                )}
+              </For>
               <Show keyed when={preview()}>
                 {(current) => (
                   <>
-                    <PendingMessage role="user" content={current.user} />
+                    <Show when={current.user !== undefined}>
+                      <PendingMessage role="user" content={current.user!} />
+                    </Show>
                     <Show when={current.assistant !== undefined}>
                       <PendingMessage role="assistant" content={current.assistant!} />
                     </Show>
@@ -975,7 +1049,13 @@ function ChatEmpty() {
   )
 }
 
-function ChatMessageView(props: { message: ChatMessage }) {
+function ChatMessageView(props: {
+  message: ChatMessage
+  onRetry: () => void
+  retryable: boolean
+  retryDisabled: boolean
+  retrying: boolean
+}) {
   const { formatDateTime, t } = useI18n()
   return (
     <article class={`chat-message chat-message--${props.message.role}`}>
@@ -999,6 +1079,25 @@ function ChatMessageView(props: { message: ChatMessage }) {
         fallback={<p>{props.message.content}</p>}
       >
         <MarkdownContent source={props.message.content} />
+      </Show>
+      <Show when={props.retryable}>
+        <footer class="chat-message-retry">
+          <span>{t('chat.messages.unanswered')}</span>
+          <button
+            type="button"
+            disabled={props.retryDisabled}
+            aria-label={t('chat.messages.retry')}
+            onClick={() => props.onRetry()}
+          >
+            <Show
+              when={props.retrying}
+              fallback={<RotateCcw size={14} strokeWidth={2} />}
+            >
+              <LoaderCircle class="spin" size={14} strokeWidth={2} />
+            </Show>
+            {t(props.retrying ? 'chat.messages.retrying' : 'chat.messages.retry')}
+          </button>
+        </footer>
       </Show>
     </article>
   )
@@ -1115,6 +1214,9 @@ function streamErrorMessage(
     )
   }
   if (code === 'agent_run_in_progress') return t('chat.errors.runInProgress')
+  if (code === 'agent_request_not_retryable') {
+    return t('chat.errors.notRetryable')
+  }
   if (
     code === 'agent_coordination_unavailable' ||
     code === 'agent_run_lease_lost'
@@ -1157,6 +1259,20 @@ function updateCachedChat(queryClient: QueryClient, chat: Chat): void {
       ...current,
       chats: current.chats.map((item) =>
         item.chat_id === chat.chat_id ? chat : item,
+      ),
+    }
+  })
+}
+
+function setCachedActiveChat(queryClient: QueryClient, chat: Chat): void {
+  queryClient.setQueryData<ChatListResponse>(CHATS_QUERY_KEY, (current) => {
+    if (current === undefined) return current
+    return {
+      ...current,
+      chats: current.chats.map((item) =>
+        item.chat_id === chat.chat_id
+          ? { ...chat, is_active: true }
+          : { ...item, is_active: false },
       ),
     }
   })

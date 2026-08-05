@@ -5,7 +5,7 @@ import type {
 } from '@/entities/chat/model'
 import { apiStreamRequest } from '@/shared/api/http'
 
-type AgentStreamHandlers = {
+export type AgentStreamHandlers = {
   onError: (error: AgentStreamError) => void
   onPlan: (plan: AgentPlan) => void
   onResult: (result: AgentResult) => void
@@ -16,10 +16,33 @@ export async function runAgentStream(
   message: string,
   handlers: AgentStreamHandlers,
 ): Promise<void> {
-  const response = await apiStreamRequest(`/chats/${chatId}/agent`, {
-    method: 'POST',
-    body: JSON.stringify({ message }),
-  })
+  await streamAgentResponse(
+    `/chats/${chatId}/agent`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    },
+    handlers,
+  )
+}
+
+export async function retryAgentStream(
+  chatId: string,
+  handlers: AgentStreamHandlers,
+): Promise<void> {
+  await streamAgentResponse(
+    `/chats/${chatId}/agent/retry`,
+    { method: 'POST' },
+    handlers,
+  )
+}
+
+async function streamAgentResponse(
+  path: `/${string}`,
+  init: RequestInit,
+  handlers: AgentStreamHandlers,
+): Promise<void> {
+  const response = await apiStreamRequest(path, init)
   if (response.body === null) {
     throw new Error('The agent response stream is unavailable')
   }

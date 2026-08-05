@@ -30,6 +30,9 @@ export const chat = {
     loadingEarlier: 'Loading earlier messages',
     user: 'You',
     assistant: 'Assistant',
+    unanswered: 'The assistant did not complete this request.',
+    retry: 'Try again',
+    retrying: 'Trying again',
   },
   composer: {
     placeholder: 'Ask about tasks or describe what should change…',
@@ -57,6 +60,7 @@ export const chat = {
     runInProgress: 'This conversation is already processing another request.',
     coordination: 'The assistant is temporarily unavailable. Try again shortly.',
     execution: 'The assistant could not complete the request.',
+    notRetryable: 'This request can no longer be retried.',
     quotaExhausted: 'The assistant request limit has been reached.',
     quotaExhaustedUnverified:
       'The assistant request limit has been reached. Verify your email to increase it.',
